@@ -2528,6 +2528,7 @@ loop {
                 shared.clone(),
                 seg,
                 part_path.clone(),
+                Some(final_path.clone()),
                 global.clone(),
                 task_throttle.clone(),
                 retry.clone(),
@@ -2746,13 +2747,17 @@ const STEAL_THRESHOLD: u64 = 256 * 1024;
     }
 ```
 
-(c) `segment_worker` 中两处 `if shared.segment(seg.index).remaining() == 0 { return Ok(WorkerExit::Done); }`（loop 顶部与 `Eof` 分支后）都改为调用偷段循环：
+(c) `segment_worker` 签名增加参数 `ctl: Option<PathBuf>`（在 `part_path` 之后；Task 9 的调用点与 Task 11 的 `drive_download` 调用点都传 `Some(final_path.clone())`）。两处 `if shared.segment(seg.index).remaining() == 0 { return Ok(WorkerExit::Done); }`（loop 顶部与 `Eof` 分支后）都改为"落盘 + 偷段循环"：
 
 ```rust
 // segment_worker 内：两处完成点
 //     if shared.segment(seg.index).remaining() == 0 { return Ok(WorkerExit::Done); }
 // 都替换为：
         if shared.segment(seg.index).remaining() == 0 {
+            // 分片完成即落盘控制文件（spec：每 2 秒或有分片完成时）
+            if let Some(final_path) = &ctl {
+                let _ = control_file::save(final_path, &shared.build_control_file());
+            }
             match shared.steal_largest() {
                 Some(stolen) => {
                     seg = stolen;
@@ -2763,6 +2768,8 @@ const STEAL_THRESHOLD: u64 = 256 * 1024;
             }
         }
 ```
+
+(d) 顺带修订 Task 9 的 `multithread_download_completes` 测试：`spec(server.url.clone(), &dir, None)` 改为 `spec(server.url.clone(), &dir, Some(2_000_000))`（2 MB/s 限速确保跨过首个 2s 保存周期后才完成，使 `!file.bin.sparkling.exists()` 断言真正检验 finalize 的删除，而非"从未保存过"的空转）。
 
 - [ ] **Step 4: 运行验证通过**
 
@@ -3135,7 +3142,8 @@ async fn drive_download(
             .map(|seg| {
                 tokio::spawn(segment_worker(
                     client.clone(), spec.clone(), shared.clone(), seg,
-                    part_path.clone(), global.clone(), task.clone(), retry.clone(),
+                    part_path.clone(), Some(final_path.clone()),
+                    global.clone(), task.clone(), retry.clone(),
                 ))
             })
             .collect();
