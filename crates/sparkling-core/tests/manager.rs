@@ -12,6 +12,7 @@ fn manager(dir: &tempfile::TempDir, cfg: ManagerConfig) -> TaskManager {
         &dir.path().join("tasks.db"),
         Arc::new(HttpEngine::new_with_policy(None, RetryPolicy::fast())),
         cfg,
+        tokio::runtime::Handle::current(),
     )
     .unwrap()
 }
@@ -201,6 +202,7 @@ async fn recovery_auto_resumes() {
         &dir.path().join("tasks.db"),
         Arc::new(HttpEngine::new_with_policy(None, RetryPolicy::fast())),
         ManagerConfig::default(),
+        tokio::runtime::Handle::current(),
     )
     .unwrap();
     let mut rx = m2.subscribe();
@@ -287,4 +289,69 @@ async fn move_to_top_reorders_queue() {
     assert_eq!(next_running, id_c);
     wait_event_state(&mut rx, &id_c, TaskState::Completed, Duration::from_secs(60)).await;
     wait_event_state(&mut rx, &id_b, TaskState::Completed, Duration::from_secs(60)).await;
+}
+
+#[tokio::test]
+async fn add_task_works_off_runtime_thread() {
+    // C1 回归：TaskManager 持 runtime Handle 时，无 ambient runtime 的裸线程
+    // （Tauri 的 WebView2 COM 回调线程同款处境）调用 add_task 不得 panic，
+    // 且任务经 Handle::spawn 正常落在 runtime 上完成。
+    // 旧实现（裸 tokio::spawn）会在该线程里 panic，首个「新建下载」即崩
+    let server = start(ServerConfig { size: 64 * 1024, ..Default::default() }).await;
+    let dir = tempfile::tempdir().unwrap();
+    let handle = tokio::runtime::Handle::current();
+    let url = server.url.clone();
+    let save_dir = dir.path().to_path_buf();
+    let db = dir.path().join("tasks.db");
+    let engine: std::sync::Arc<dyn sparkling_core::engine::Engine> =
+        std::sync::Arc::new(HttpEngine::new_with_policy(None, RetryPolicy::fast()));
+    // 构造 + add_task 全在裸线程上完成；manager 一并带回（同一条 store 连接
+    // 观察完成态，避免第二个连接碰 SQLite 锁）
+    let (m, id) = std::thread::spawn(move || {
+        let m = TaskManager::new(&db, engine, ManagerConfig::default(), handle).unwrap();
+        let id = m
+            .add_task(
+                url,
+                AddTaskOptions { save_dir, filename: None, segments: Some(2), max_speed: None },
+            )
+            .unwrap();
+        (m, id)
+    })
+    .join()
+    .expect("裸线程调用不得 panic");
+    poll_until(Duration::from_secs(30), || {
+        m.list_tasks().unwrap().into_iter().find(|r| r.id == id)
+            .filter(|r| r.state == TaskState::Completed)
+            .map(|_| ())
+    })
+    .await;
+    assert!(dir.path().join("file.bin").exists());
+}
+
+#[tokio::test]
+async fn remove_task_cleans_orphan_ctl_and_part() {
+    // M2 回归：无句柄任务（重启残留的 Running/Paused）删除时须一并清掉
+    // ctl/.part——否则之后同 URL 重新添加会静默从旧控制文件续传
+    let server = start(ServerConfig { size: 512 * 1024, ..Default::default() }).await;
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let m = manager(&dir, ManagerConfig::default());
+        let _id = m.add_task(server.url.clone(), opts(&dir, Some(200_000))).unwrap();
+        poll_until(Duration::from_secs(20), || {
+            let r = m.list_tasks().unwrap().into_iter().next().unwrap();
+            (r.downloaded > 50_000).then_some(())
+        })
+        .await;
+        m.shutdown(); // 模拟应用退出：ctl/.part 留盘，任务残留 Running（无句柄）
+    }
+    assert!(dir.path().join("file.bin.sparkling").exists());
+    assert!(dir.path().join("file.bin.sparkling.part").exists());
+
+    let m2 = manager(&dir, ManagerConfig::default());
+    let recs = m2.list_tasks().unwrap();
+    assert_eq!(recs.len(), 1);
+    m2.remove_task(&recs[0].id).unwrap();
+    assert!(!dir.path().join("file.bin.sparkling").exists(), "残留 ctl 应被清理");
+    assert!(!dir.path().join("file.bin.sparkling.part").exists(), "残留 .part 应被清理");
+    assert!(m2.list_tasks().unwrap().is_empty());
 }

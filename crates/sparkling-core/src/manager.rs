@@ -58,6 +58,10 @@ struct Inner {
     /// 运行中（不含暂停）任务数
     active: Arc<AtomicUsize>,
     shutting_down: Arc<AtomicBool>,
+    /// 调度用的 Tokio Handle。本模块的公开方法会被 Tauri 命令层在**无
+    /// ambient runtime 的线程**（WebView2 COM 回调）上同步调用，裸
+    /// `tokio::spawn` 在那种线程直接 panic——Handle 可从任意线程 spawn（C1）
+    runtime: tokio::runtime::Handle,
 }
 
 pub struct TaskManager {
@@ -65,10 +69,14 @@ pub struct TaskManager {
 }
 
 impl TaskManager {
+    /// `runtime`：上层（Tauri 壳）的 Tokio 运行时 Handle。manager 的公开方法
+    /// 全部是同步 fn、可能从任意线程调用——调度任务必须经 `Handle::spawn`
+    /// 落到运行时上，而非假设调用线程有 ambient runtime（C1）
     pub fn new(
         store_path: &std::path::Path,
         engine: Arc<dyn Engine>,
         config: ManagerConfig,
+        runtime: tokio::runtime::Handle,
     ) -> Result<Self> {
         let store = TaskStore::open(store_path)?;
         let (events, _) = broadcast::channel(1024);
@@ -82,6 +90,7 @@ impl TaskManager {
                 events,
                 active: Arc::new(AtomicUsize::new(0)),
                 shutting_down: Arc::new(AtomicBool::new(false)),
+                runtime,
             }),
         })
     }
@@ -94,7 +103,10 @@ impl TaskManager {
         self.inner.config.lock().unwrap().clone()
     }
 
-    pub fn set_config(&self, cfg: ManagerConfig) {
+    pub fn set_config(&self, mut cfg: ManagerConfig) {
+        // M3：钳制非法值——max_concurrent=0 会让队列永久饿死（active >= 0 恒真）
+        cfg.max_concurrent = cfg.max_concurrent.clamp(1, 10);
+        cfg.default_segments = cfg.default_segments.clamp(1, 64);
         *self.inner.config.lock().unwrap() = cfg;
         self.inner
             .engine
@@ -167,45 +179,84 @@ impl TaskManager {
 
     /// Failed/Paused → Queued，重新调度（引擎检测控制文件从断点续传）。
     /// 防重入（D36）：运行/暂停中（有句柄）或已在队列的任务直接 Ok 忽略——
-    /// 否则 UI 双击重试/重复恢复会把同一任务二次提交，两个引擎写同一 .part
+    /// 否则 UI 双击重试/重复恢复会把同一任务二次提交，两个引擎写同一 .part。
+    /// I1：终态判定（不持队列锁）先行，"是否已在队列"的检查与 push_back
+    /// 收进**同一个**队列临界区——原先两段临界区之间松锁，并发两次 retry
+    /// 都能通过检查、各 push 一次（TOCTOU 双提交）
     pub fn retry_task(&self, id: &str) -> Result<()> {
         if self.inner.handles.lock().unwrap().contains_key(id) {
             return Ok(()); // 运行/暂停中：由 pause/resume 管理
         }
-        let q = self.inner.queue.lock().unwrap();
-        if q.iter().any(|x| x == id) {
-            return Ok(()); // 已在队列
-        }
-        drop(q);
         // 终态保护（D36 测试「终态不得被重试/取消改写」）：Completed/Cancelled
         // 直接忽略——否则 update_state(Queued) 先落库，出队侧的终态过滤永远
         // 看不到 Completed，任务会被重新下载。重启残留的 Running（无句柄）
         // 不在此列：recover() 正是靠重新排队续传它（有句柄的 Running 已被
         // 上面的句柄守卫拦下）
-        if let Some(rec) = self.inner.store.lock().unwrap().get(id)? {
+        if let Some(rec) = self.inner.store.lock().unwrap().get(id).ok().flatten() {
             if matches!(rec.state, TaskState::Completed | TaskState::Cancelled) {
                 return Ok(());
             }
         }
-        self.inner.queue.lock().unwrap().push_back(id.to_string());
+        let mut q = self.inner.queue.lock().unwrap();
+        if q.iter().any(|x| x == id) {
+            return Ok(()); // 已在队列
+        }
+        q.push_back(id.to_string());
+        drop(q);
         self.inner.store.lock().unwrap().update_state(id, TaskState::Queued, None)?;
         self.emit_state(id, TaskState::Queued, None);
         try_schedule(&self.inner);
         Ok(())
     }
 
+    /// 删除任务记录。有句柄（引擎在跑）→ 引擎取消路径自会清理 ctl/.part；
+    /// 无句柄（排队/重启残留的 Paused 等）→ 残留文件没人管，之后同 URL
+    /// 重新添加会静默从旧控制文件续传——这里补删（M2）。
     pub fn remove_task(&self, id: &str) -> Result<()> {
-        if let Some(h) = self.inner.handles.lock().unwrap().get(id).cloned() {
+        let handle = self.inner.handles.lock().unwrap().get(id).cloned();
+        if let Some(h) = &handle {
             let _ = h.cancel();
         }
+        // 记录先于删除取：删除后 filename/save_dir 就无处可查了
+        let rec = self.inner.store.lock().unwrap().get(id).ok().flatten();
         self.inner.queue.lock().unwrap().retain(|q| q != id);
         self.inner.store.lock().unwrap().delete(id)?;
+        if handle.is_none() {
+            if let Some(rec) = rec {
+                if let Some(name) = rec.filename {
+                    let final_path = PathBuf::from(&rec.save_dir).join(&name);
+                    let ctl = control_file::path_for(&final_path);
+                    // .part 命名镜像 http_engine::part_path_for（<名>.sparkling.part）
+                    let mut part = final_path.into_os_string();
+                    part.push(".sparkling.part");
+                    let _ = std::fs::remove_file(&ctl);
+                    let _ = std::fs::remove_file(&part);
+                }
+            }
+        }
         Ok(())
     }
 
+    /// 置顶：仅对排队中（无句柄）的任务有意义。
+    /// I2：不加守卫时任何 id 都会进队列头——Running 被再次提交（双引擎写
+    /// 同一 .part），Failed 等于静默自动重试。一律 no-op 挡下
     pub fn move_to_top(&self, id: &str) -> Result<()> {
+        let has_handle = self.inner.handles.lock().unwrap().contains_key(id);
+        let is_queued = self
+            .inner
+            .store
+            .lock()
+            .unwrap()
+            .get(id)
+            .ok()
+            .flatten()
+            .map(|r| r.state == TaskState::Queued)
+            .unwrap_or(false);
+        if has_handle || !is_queued {
+            return Ok(()); // 运行/暂停/终态置顶无意义且危险（重复提交/意外重试）
+        }
         let mut q = self.inner.queue.lock().unwrap();
-        q.retain(|q| q != id);
+        q.retain(|x| x != id);
         q.push_front(id.to_string());
         Ok(())
     }
@@ -320,7 +371,9 @@ fn try_schedule(inner: &Arc<Inner>) {
         };
         inner.active.fetch_add(1, Ordering::SeqCst);
         let inner2 = inner.clone();
-        tokio::spawn(async move {
+        // C1：经注入的 Handle spawn——本函数会被 Tauri 同步命令（无 ambient
+        // runtime 的 WebView2 COM 回调线程）直接调用，裸 tokio::spawn 会 panic
+        inner.runtime.spawn(async move {
             match inner2.engine.submit(spec).await {
                 Ok(handle) => {
                     inner2.handles.lock().unwrap().insert(id.clone(), handle.clone());

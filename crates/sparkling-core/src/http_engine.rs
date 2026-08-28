@@ -307,7 +307,10 @@ async fn run_download(
     let probe = with_retry(retry, || probe::probe(client, &spec.url))
         .await
         .map_err(DownloadEnd::Failed)?;
-    let filename = spec.filename.clone().unwrap_or_else(|| probe.filename.clone());
+    // I3：文件名的唯一汇聚点——用户覆盖与探测结果（Content-Disposition / URL
+    // 末段）都过同一道消毒。下游 ctl/.part/正式文件路径全部由消毒后的名字派生
+    let filename =
+        sanitize_filename(&spec.filename.clone().unwrap_or_else(|| probe.filename.clone()));
     let final_path = spec.save_dir.join(&filename);
     let part_path = part_path_for(&final_path);
     let ctl_path = control_file::path_for(&final_path);
@@ -626,6 +629,33 @@ fn part_path_for(final_path: &Path) -> PathBuf {
     let mut s = final_path.as_os_str().to_os_string();
     s.push(".sparkling.part");
     PathBuf::from(s)
+}
+
+/// 清洗文件名：剥离路径分隔符/驱动器前缀/点组件与 Windows 保留设备名，
+/// 非法或空时回退 "download"。防止 Content-Disposition / URL 注入路径穿越（I3）。
+fn sanitize_filename(name: &str) -> String {
+    // 取最后一个路径组件（兼容 \ 与 /）
+    let base = name.rsplit(['\\', '/']).next().unwrap_or("").trim();
+    // 剥离 Windows 驱动器前缀（形如 "C:"）与残留冒号
+    let cleaned: String = base.chars().filter(|&c| c != ':').collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        return "download".to_string();
+    }
+    // Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9，不含扩展名比较）
+    let stem = cleaned.split('.').next().unwrap_or("");
+    let upper = stem.to_ascii_uppercase();
+    let reserved = ["CON", "PRN", "AUX", "NUL"]
+        .iter()
+        .any(|r| *r == upper)
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper[3..].chars().all(|c| c.is_ascii_digit())
+            && upper[3..] != *"0");
+    if reserved {
+        return format!("download-{cleaned}");
+    }
+    cleaned.to_string()
 }
 
 /// 进度上报器：250ms 快照 + 3 秒滑动窗口测速。
@@ -1014,4 +1044,55 @@ fn finalize(
         .map_err(|e| SparklingError::DiskWrite(format!("重命名失败: {e}")))?;
     let _ = std::fs::remove_file(ctl_path);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_filename;
+
+    #[test]
+    fn sanitize_strips_path_components() {
+        // 路径穿越向量：只保留最后分量（\ 与 / 都认）
+        assert_eq!(sanitize_filename("..\\evil"), "evil");
+        assert_eq!(sanitize_filename("C:\\evil"), "evil");
+        assert_eq!(sanitize_filename("../../evil"), "evil");
+        assert_eq!(sanitize_filename("a/b"), "b");
+        assert_eq!(sanitize_filename("a\\b\\c.txt"), "c.txt");
+        // 绝对路径（Windows 上 join 会整个替换 save_dir）
+        assert_eq!(sanitize_filename("/etc/passwd"), "passwd");
+        // 裸驱动器前缀：冒号被剥掉后余下单字母名——无害（join 不会逃出 save_dir）
+        assert_eq!(sanitize_filename("C:"), "C");
+    }
+
+    #[test]
+    fn sanitize_percent_sequences_pass_through() {
+        // 本层不解码：a%2Fb 的解码发生在 probe（filename_from_url），
+        // 解码出的分隔符由上面的分量剥离兜底
+        assert_eq!(sanitize_filename("a%2Fb"), "a%2Fb");
+    }
+
+    #[test]
+    fn sanitize_fallback_for_dot_and_empty() {
+        assert_eq!(sanitize_filename("."), "download");
+        assert_eq!(sanitize_filename(".."), "download");
+        assert_eq!(sanitize_filename(""), "download");
+        assert_eq!(sanitize_filename("   "), "download");
+    }
+
+    #[test]
+    fn sanitize_renames_windows_reserved_devices() {
+        assert_eq!(sanitize_filename("CON"), "download-CON");
+        assert_eq!(sanitize_filename("CON.txt"), "download-CON.txt");
+        assert_eq!(sanitize_filename("com1"), "download-com1");
+        assert_eq!(sanitize_filename("LPT9"), "download-LPT9");
+        // COM0/LPT0 不是保留名，原样通过
+        assert_eq!(sanitize_filename("com0"), "com0");
+    }
+
+    #[test]
+    fn sanitize_passes_normal_names_through() {
+        assert_eq!(sanitize_filename("file.bin"), "file.bin");
+        assert_eq!(sanitize_filename("report q4.zip"), "report q4.zip");
+        assert_eq!(sanitize_filename("自定义.bin"), "自定义.bin");
+    }
 }

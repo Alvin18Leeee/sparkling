@@ -102,8 +102,17 @@ pub fn run() {
                 .unwrap_or_else(|_| PathBuf::from("."));
             let engine: Arc<dyn sparkling_core::engine::Engine> =
                 Arc::new(HttpEngine::new(cfg.global_speed_limit));
-            let manager = TaskManager::new(&config_dir.join("tasks.db"), engine, cfg)
-                .expect("初始化任务管理器失败");
+            // C1：命令层是同步 fn，tauri 在 WebView2 COM 回调线程上内联执行
+            // （无 ambient runtime）——manager 必须持 Handle 才能从那里 spawn。
+            // tauri::async_runtime::handle() 返回自身包装的 RuntimeHandle，
+            // inner() 借出内部的 tokio Handle
+            let manager = TaskManager::new(
+                &config_dir.join("tasks.db"),
+                engine,
+                cfg,
+                tauri::async_runtime::handle().inner().clone(),
+            )
+            .expect("初始化任务管理器失败");
             app.manage(AppState { manager, config_path, default_save_dir });
 
             // 恢复上次未完成任务（默认自动续传）

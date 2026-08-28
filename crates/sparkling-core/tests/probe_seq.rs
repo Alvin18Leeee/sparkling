@@ -143,6 +143,27 @@ mod engine_tests {
     }
 
     #[tokio::test]
+    async fn user_filename_traversal_is_sanitized() {
+        // I3 回归：用户提供的文件名携带 ..\..\ 穿越 → 消毒后只余最后分量，
+        // 文件必须落在 save_dir 之内（消毒点在 run_download 的文件名汇聚处，
+        // 用户覆盖与探测结果过同一关卡；ctl/.part 路径同由消毒名派生）
+        let server = start(ServerConfig { size: 100, support_range: false, ..Default::default() }).await;
+        let dir = tempfile::tempdir().unwrap();
+        let e = engine().await;
+        let mut s = spec(server.url.clone(), &dir);
+        s.filename = Some("..\\..\\evil.exe".into());
+        let handle = e.submit(s).await.unwrap();
+        let mut rx = handle.subscribe();
+        wait_state(&mut rx, TaskState::Completed, Duration::from_secs(10)).await;
+        assert!(dir.path().join("evil.exe").exists(), "应落盘为 save_dir 内的 evil.exe");
+        // 穿越目标（save_dir 上两级）不得出现文件
+        assert!(!dir.path().join("..").join("..").join("evil.exe").exists());
+        // save_dir 内除正式产物外无残留临时文件
+        assert!(!dir.path().join("evil.exe.sparkling.part").exists());
+        assert!(!dir.path().join("evil.exe.sparkling").exists());
+    }
+
+    #[tokio::test]
     async fn probe_error_fails_task() {
         let server = start(ServerConfig { fail_mode: FailMode::Always5xx, ..Default::default() }).await;
         let dir = tempfile::tempdir().unwrap();
