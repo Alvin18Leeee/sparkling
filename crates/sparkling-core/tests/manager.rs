@@ -95,6 +95,49 @@ async fn pause_resume_cancel_via_manager() {
 }
 
 #[tokio::test]
+async fn retry_is_idempotent() {
+    // D36：双击重试不得二次入队/二次提交（两个引擎写同一 .part 会损坏）
+    let server = start(ServerConfig { size: 512 * 1024, ..Default::default() }).await;
+    let dir = tempfile::tempdir().unwrap();
+    let m = manager(&dir, ManagerConfig::default());
+    let id = m.add_task(server.url.clone(), opts(&dir, Some(400_000))).unwrap();
+    let mut rx = m.subscribe();
+    wait_event_state(&mut rx, &id, TaskState::Completed, Duration::from_secs(60)).await;
+    // 完成后连点两次重试 + 一次取消：都应是安全 no-op
+    m.retry_task(&id).unwrap();
+    m.retry_task(&id).unwrap();
+    m.cancel_task(&id).unwrap();
+    let rec = m.list_tasks().unwrap().into_iter().find(|r| r.id == id).unwrap();
+    assert_eq!(rec.state, TaskState::Completed, "终态不得被重试/取消改写");
+}
+
+#[tokio::test]
+async fn cancel_queued_task_dequeues() {
+    // D36：排队任务（无句柄）取消 → 出队 + Cancelled，不再被调度
+    let server_a = start(ServerConfig { size: 512 * 1024, ..Default::default() }).await;
+    let server_b = start(ServerConfig { size: 512 * 1024, ..Default::default() }).await;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let m = manager(&dir_a, ManagerConfig { max_concurrent: 1, ..Default::default() });
+    let mut rx = m.subscribe();
+    let id_a = m.add_task(server_a.url.clone(), opts(&dir_a, Some(300_000))).unwrap();
+    let id_b = m.add_task(server_b.url.clone(), opts(&dir_b, Some(300_000))).unwrap();
+    // B 在排队（A 占用唯一并发位）→ 取消 B
+    poll_until(Duration::from_secs(10), || {
+        let recs = m.list_tasks().unwrap();
+        recs.iter().find(|r| r.id == id_b).filter(|r| r.state == TaskState::Queued).map(|_| ())
+    })
+    .await;
+    m.cancel_task(&id_b).unwrap();
+    let rec_b = m.list_tasks().unwrap().into_iter().find(|r| r.id == id_b).unwrap();
+    assert_eq!(rec_b.state, TaskState::Cancelled);
+    // A 正常完成；B 被取消不落盘
+    wait_event_state(&mut rx, &id_a, TaskState::Completed, Duration::from_secs(60)).await;
+    assert!(dir_a.path().join("file.bin").exists());
+    assert!(!dir_b.path().join("file.bin").exists());
+}
+
+#[tokio::test]
 async fn retry_failed_continues_from_control_file() {
     // 参数偏离 brief（512KB / segments 4 → 2MB / segments 2 + drop_after）：
     // 引擎开工即把所有分段的请求全部发出（每段一个 worker，一批覆盖全部段），

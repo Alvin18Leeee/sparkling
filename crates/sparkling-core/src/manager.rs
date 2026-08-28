@@ -99,6 +99,8 @@ impl TaskManager {
         self.inner
             .engine
             .set_speed_limit(self.inner.config.lock().unwrap().global_speed_limit);
+        // 调大 max_concurrent 时立即把排队任务提上来
+        try_schedule(&self.inner);
     }
 
     pub fn add_task(&self, url: String, opts: AddTaskOptions) -> Result<TaskId> {
@@ -134,28 +136,59 @@ impl TaskManager {
 
     /// 有句柄（引擎里有该任务）→ 直达；无句柄（重启恢复的 Paused）→ 重新排队
     pub fn resume_task(&self, id: &str) -> Result<()> {
-        if let Some(h) = self.inner.handles.lock().unwrap().get(id).cloned() {
+        // 先查句柄再分支：if-let 条件里的锁守卫会活到整个 if-else 结束，
+        // else 分支里 retry_task 再锁 handles 即自死锁（Mutex 不可重入，D36）
+        let h = self.inner.handles.lock().unwrap().get(id).cloned();
+        if let Some(h) = h {
             h.resume()
         } else {
             self.retry_task(id)
         }
     }
 
+    /// 取消：有句柄（运行/暂停中）→ 送达引擎；纯排队任务 → 出队并标记
+    /// Cancelled（D36：状态机 Queued→Cancelled 合法，静默空操作是最坏结果）
     pub fn cancel_task(&self, id: &str) -> Result<()> {
         if let Some(h) = self.inner.handles.lock().unwrap().get(id).cloned() {
-            h.cancel()?;
+            return h.cancel();
+        }
+        let was_queued = {
+            let mut q = self.inner.queue.lock().unwrap();
+            let was = q.iter().any(|x| x == id);
+            q.retain(|x| x != id);
+            was
+        };
+        if was_queued {
+            self.inner.store.lock().unwrap().update_state(id, TaskState::Cancelled, None).ok();
+            self.emit_state(id, TaskState::Cancelled, None);
         }
         Ok(())
     }
 
-    /// Failed/Paused → Queued，重新调度（引擎检测控制文件从断点续传）
+    /// Failed/Paused → Queued，重新调度（引擎检测控制文件从断点续传）。
+    /// 防重入（D36）：运行/暂停中（有句柄）或已在队列的任务直接 Ok 忽略——
+    /// 否则 UI 双击重试/重复恢复会把同一任务二次提交，两个引擎写同一 .part
     pub fn retry_task(&self, id: &str) -> Result<()> {
-        self.inner
-            .store
-            .lock()
-            .unwrap()
-            .update_state(id, TaskState::Queued, None)?;
+        if self.inner.handles.lock().unwrap().contains_key(id) {
+            return Ok(()); // 运行/暂停中：由 pause/resume 管理
+        }
+        let q = self.inner.queue.lock().unwrap();
+        if q.iter().any(|x| x == id) {
+            return Ok(()); // 已在队列
+        }
+        drop(q);
+        // 终态保护（D36 测试「终态不得被重试/取消改写」）：Completed/Cancelled
+        // 直接忽略——否则 update_state(Queued) 先落库，出队侧的终态过滤永远
+        // 看不到 Completed，任务会被重新下载。重启残留的 Running（无句柄）
+        // 不在此列：recover() 正是靠重新排队续传它（有句柄的 Running 已被
+        // 上面的句柄守卫拦下）
+        if let Some(rec) = self.inner.store.lock().unwrap().get(id)? {
+            if matches!(rec.state, TaskState::Completed | TaskState::Cancelled) {
+                return Ok(());
+            }
+        }
         self.inner.queue.lock().unwrap().push_back(id.to_string());
+        self.inner.store.lock().unwrap().update_state(id, TaskState::Queued, None)?;
         self.emit_state(id, TaskState::Queued, None);
         try_schedule(&self.inner);
         Ok(())

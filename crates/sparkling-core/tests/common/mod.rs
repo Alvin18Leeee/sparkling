@@ -362,6 +362,8 @@ pub async fn wait_event_state(
     loop {
         let ev = match tokio::time::timeout_at(deadline, rx.recv()).await {
             Ok(Ok(ev)) => ev,
+            // 慢订阅者丢帧（Lagged）不算通道关闭：继续等后续事件
+            Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
             Ok(Err(_)) => panic!("事件通道关闭"),
             Err(_) => panic!("等待事件状态 {want:?} 超时（id={id}）"),
         };
