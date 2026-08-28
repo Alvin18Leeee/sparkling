@@ -4376,9 +4376,12 @@ impl TaskManager {
         h.pause()
     }
 
-    /// 有句柄（引擎里有该任务）→ 直达；无句柄（重启恢复的 Paused）→ 重新排队
+    /// 有句柄（引擎里有该任务）→ 直达；无句柄（重启恢复的 Paused）→ 重新排队。
+    /// 注意先绑定局部变量再分支：`if let` 审视项里的锁守卫会存活到整个
+    /// if-else 结束，else 分支里 retry_task 重锁 handles 会自死锁（D36 补遗）
     pub fn resume_task(&self, id: &str) -> Result<()> {
-        if let Some(h) = self.inner.handles.lock().unwrap().get(id).cloned() {
+        let h = self.inner.handles.lock().unwrap().get(id).cloned();
+        if let Some(h) = h {
             h.resume()
         } else {
             self.retry_task(id)
@@ -4405,7 +4408,8 @@ impl TaskManager {
     }
 
     /// Failed/Paused → Queued，重新调度（引擎检测控制文件从断点续传）。
-    /// 防重入（D36）：运行/暂停中（有句柄）或已在队列的任务直接 Ok 忽略——
+    /// 防重入（D36）：运行/暂停中（有句柄）、已在队列、终态（Completed/Cancelled，
+    /// 出队侧过滤看不到 Queued 落库后的记录，必须在此拦截）的任务直接 Ok 忽略——
     /// 否则 UI 双击重试/重复恢复会把同一任务二次提交，两个引擎写同一 .part
     pub fn retry_task(&self, id: &str) -> Result<()> {
         if self.inner.handles.lock().unwrap().contains_key(id) {
@@ -4417,6 +4421,13 @@ impl TaskManager {
         }
         q.push_back(id.to_string());
         drop(q);
+        // 终态守卫：完成/取消的任务不可重试（状态机红线）
+        if let Some(rec) = self.inner.store.lock().unwrap().get(id).ok().flatten() {
+            if matches!(rec.state, TaskState::Completed | TaskState::Cancelled) {
+                self.inner.queue.lock().unwrap().retain(|x| x != id);
+                return Ok(());
+            }
+        }
         self.inner.store.lock().unwrap().update_state(id, TaskState::Queued, None)?;
         self.emit_state(id, TaskState::Queued, None);
         try_schedule(&self.inner);
