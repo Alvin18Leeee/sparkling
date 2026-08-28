@@ -1,0 +1,8 @@
+/target
+node_modules/
+dist/*
+!dist/index.html
+*.sparkling
+*.sparkling.part
+tasks.db
+settings.json
