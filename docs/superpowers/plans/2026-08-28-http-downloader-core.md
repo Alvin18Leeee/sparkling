@@ -4732,7 +4732,7 @@ fn main() {
 }
 ```
 
-（`bundle.active: false`：安装包/图标/自动更新属④期。）
+（`bundle.active: false`：安装包/自动更新属④期。但 **tauri-build 在 Windows 无条件要求 icon**——`bundle.active=false` 不豁免 exe 资源生成，需占位 `src-tauri/icons/icon.ico`（实证缺文件构建失败）。另需 `src-tauri/Cargo.toml` 直接依赖 `tokio = { version = "1", features = ["sync"] }`（事件转发的 RecvError 按变体匹配需要可命名类型；core 已 full，零额外编译成本），`.gitignore` 补 `src-tauri/gen/`（tauri-build 再生的 schema 产物）。）
 
 `dist/index.html`（占位）：
 
