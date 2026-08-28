@@ -62,3 +62,37 @@ fn atomic_save_leaves_no_tmp() {
     let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
     assert_eq!(files.len(), 1); // 只有 .sparkling，没有残留 tmp
 }
+
+mod throttle_tests {
+    use sparkling_core::throttle::TokenBucket;
+
+    #[tokio::test(start_paused = true)]
+    async fn unlimited_acquires_immediately() {
+        let bucket = TokenBucket::new(None);
+        let t0 = tokio::time::Instant::now();
+        for _ in 0..1000 {
+            bucket.acquire(64 * 1024).await;
+        }
+        assert!(t0.elapsed().as_millis() < 10);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rate_limited_paces_output() {
+        let bucket = TokenBucket::new(Some(1000)); // 1000 B/s
+        bucket.acquire(1000).await; // 初始令牌覆盖（桶容量 = 1 秒配额，取尽后桶空）
+        let t0 = tokio::time::Instant::now();
+        bucket.acquire(500).await; // 需要等 0.5s 攒令牌
+        assert!(t0.elapsed() >= std::time::Duration::from_millis(500));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn set_rate_takes_effect_immediately() {
+        let bucket = TokenBucket::new(Some(10));
+        bucket.set_rate(None);
+        let t0 = tokio::time::Instant::now();
+        for _ in 0..100 {
+            bucket.acquire(64 * 1024).await;
+        }
+        assert!(t0.elapsed().as_millis() < 10);
+    }
+}
