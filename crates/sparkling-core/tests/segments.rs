@@ -22,7 +22,9 @@ async fn multithread_download_completes() {
     let server = start(ServerConfig { size: 1024 * 1024, ..Default::default() }).await;
     let dir = tempfile::tempdir().unwrap();
     let engine = HttpEngine::new(None);
-    let handle = engine.submit(spec(server.url.clone(), &dir, None)).await.unwrap();
+    // 2 MB/s 限速：确保下载期间控制文件确已落盘（周期 + 分片完成点），
+    // 使结尾的 !file.bin.sparkling.exists() 真正检验 finalize 的删除
+    let handle = engine.submit(spec(server.url.clone(), &dir, Some(2_000_000))).await.unwrap();
     let mut rx = handle.subscribe();
     let snap = wait_state(&mut rx, TaskState::Completed, Duration::from_secs(30)).await;
     assert_eq!(snap.downloaded, 1024 * 1024);
@@ -50,4 +52,41 @@ async fn control_file_persisted_while_running() {
     drop(handle);
     drop(engine); // abort 全部 worker，模拟进程崩溃
     assert!(dir.path().join("file.bin.sparkling.part").exists(), "崩溃后 .part 应保留");
+}
+
+#[tokio::test]
+async fn stealing_eliminates_tail() {
+    // 前半段起始的请求被延迟 400ms：先完成的 worker 应从慢段偷走剩余部分
+    let server = start(ServerConfig {
+        size: 2 * 1024 * 1024,
+        slow_first_half: Some(Duration::from_millis(400)),
+        ..Default::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let engine = HttpEngine::new(None);
+    let handle = engine.submit(spec(server.url.clone(), &dir, None)).await.unwrap();
+    let mut rx = handle.subscribe();
+    let mut max_segments = 0usize;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        {
+            let cur = rx.borrow().clone();
+            max_segments = max_segments.max(cur.segments.len());
+            match cur.state {
+                TaskState::Completed => break,
+                TaskState::Failed => panic!("任务失败: {:?}", cur.error),
+                _ => {}
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("下载超时");
+        }
+        if tokio::time::timeout_at(deadline, rx.changed()).await.is_err() {
+            panic!("下载超时（通道关闭）");
+        }
+    }
+    assert!(max_segments > 8, "应发生偷段，观察到最大 {max_segments} 段");
+    let file = std::fs::read(dir.path().join("file.bin")).unwrap();
+    assert_eq!(sha256_hex(&file), sha256_hex(&server.data));
 }

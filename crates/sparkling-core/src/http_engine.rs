@@ -20,6 +20,8 @@ use tokio::task::JoinHandle;
 #[allow(dead_code)] // Task 9 多线程分片读取缓冲使用
 const CHUNK_SIZE: usize = 64 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// 剩余不足此值不偷（避免为几 KB 反复分裂）
+const STEAL_THRESHOLD: u64 = 256 * 1024;
 
 /// 分片重试策略：指数退避 initial * 2^(attempt-1)，封顶 max
 #[derive(Debug, Clone)]
@@ -71,7 +73,7 @@ struct Shared {
     paused: AtomicBool,
     cancelled: AtomicBool,
     failed: Mutex<Option<SparklingError>>,
-    #[allow(dead_code)] // Task 9 偷段分配新段号使用
+    /// 偷段时分配新段号（单调递增，不复用旧号）
     next_index: AtomicUsize,
     finished: AtomicBool,
 }
@@ -119,6 +121,22 @@ impl Shared {
             .find(|s| s.index == index)
             .map(|s| s.len())
             .unwrap_or(0)
+    }
+
+    /// 偷段：把剩余最大段的右半切出来给空闲 worker。
+    /// 剩余不足阈值（256KiB）时返回 None —— 收尾阶段不值得再切。
+    /// 注意：stolen 段必须 push 进共享表 —— 派生总进度、快照、控制文件持久化
+    /// 都以共享表为准，漏 push 会让该段的字节从计数里"消失"。
+    fn steal_largest(&self) -> Option<Segment> {
+        let mut g = self.segments.lock().unwrap();
+        let victim = g.iter_mut().max_by_key(|s| s.remaining())?;
+        if victim.remaining() < STEAL_THRESHOLD {
+            return None;
+        }
+        let new_index = self.next_index.fetch_add(1, Ordering::Relaxed);
+        let stolen = crate::segment::take_over(victim, new_index)?;
+        g.push(stolen.clone());
+        Some(stolen)
     }
 
     fn snapshot_segments(&self) -> Vec<SegmentProgress> {
@@ -310,6 +328,7 @@ async fn run_download(
                 shared.clone(),
                 seg,
                 part_path.clone(),
+                Some(final_path.clone()),
                 global.clone(),
                 task_throttle.clone(),
                 retry.clone(),
@@ -470,7 +489,9 @@ async fn sequential_worker(
     }
 }
 
-/// 分片 worker：下载指派的段直至完成（偷段在 Task 10 加入尾部）
+/// 分片 worker：下载指派的段直至完成；完成后落盘控制文件并尝试偷段，
+/// 偷不到（所有段剩余均低于阈值）才退出 —— 消除慢段长尾。
+/// `ctl` = Some(正式文件路径)：分片完成即保存控制文件（Task 11 续传依赖）。
 #[allow(clippy::too_many_arguments)]
 async fn segment_worker(
     client: reqwest::Client,
@@ -478,6 +499,7 @@ async fn segment_worker(
     shared: Arc<Shared>,
     start_seg: Segment,
     part_path: PathBuf,
+    ctl: Option<PathBuf>,
     global: Arc<TokenBucket>,
     task: Option<Arc<TokenBucket>>,
     retry: RetryPolicy,
@@ -487,7 +509,18 @@ async fn segment_worker(
     loop {
         // 用共享表判断剩余（偷段会收缩本段 end，本地副本可能过期）
         if shared.segment(seg.index).remaining() == 0 {
-            return Ok(WorkerExit::Done);
+            // 分片完成即落盘控制文件（spec：每 2 秒或有分片完成时）
+            if let Some(final_path) = &ctl {
+                let _ = control_file::save(final_path, &shared.build_control_file());
+            }
+            match shared.steal_largest() {
+                Some(stolen) => {
+                    seg = stolen;
+                    attempt = 0;
+                    continue; // 回到外层 loop，下载新段
+                }
+                None => return Ok(WorkerExit::Done),
+            }
         }
         let resp = match fetch_range(&client, &spec.url, seg.next_offset(), Some(seg.end)).await {
             // 206 守卫：带 Range 的请求若被中间层忽略返回 200 全量，
@@ -518,7 +551,18 @@ async fn segment_worker(
             StreamOutcome::Eof => {
                 // 用共享表的最新 end 判断（可能已被偷段收缩，本地副本过期）
                 if shared.segment(seg.index).remaining() == 0 {
-                    return Ok(WorkerExit::Done);
+                    // 分片完成即落盘控制文件（spec：每 2 秒或有分片完成时）
+                    if let Some(final_path) = &ctl {
+                        let _ = control_file::save(final_path, &shared.build_control_file());
+                    }
+                    match shared.steal_largest() {
+                        Some(stolen) => {
+                            seg = stolen;
+                            attempt = 0;
+                            continue; // 回到外层 loop，下载新段
+                        }
+                        None => return Ok(WorkerExit::Done),
+                    }
                 }
                 // 提前 EOF：当作可重试错误
                 attempt += 1;
