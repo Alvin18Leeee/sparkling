@@ -471,9 +471,10 @@ fn take_over_splits_remaining_in_half() {
 
 #[test]
 fn take_over_refuses_tiny_remaining() {
-    let mut seg = Segment { index: 0, start: 0, end: 10, downloaded: 10 }; // 剩余 0
+    // 含端点语义：len = end - start + 1 = 11
+    let mut seg = Segment { index: 0, start: 0, end: 10, downloaded: 11 }; // 剩余 0
     assert!(take_over(&mut seg, 1).is_none());
-    let mut seg = Segment { index: 0, start: 0, end: 10, downloaded: 9 }; // 剩余 1
+    let mut seg = Segment { index: 0, start: 0, end: 10, downloaded: 10 }; // 剩余 1
     assert!(take_over(&mut seg, 1).is_none());
 }
 ```
@@ -781,8 +782,8 @@ mod throttle_tests {
 
     #[tokio::test(start_paused = true)]
     async fn rate_limited_paces_output() {
-        let bucket = TokenBucket::new(Some(1000)); // 1000 B/s
-        bucket.acquire(500).await; // 初始令牌覆盖（桶容量 = 1 秒配额）
+        let bucket = TokenBucket::new(Some(1000)); // 1000 B/s，初始满桶 1000
+        bucket.acquire(1000).await; // 排空初始令牌
         let t0 = tokio::time::Instant::now();
         bucket.acquire(500).await; // 需要等 0.5s 攒令牌
         assert!(t0.elapsed() >= std::time::Duration::from_millis(500));
