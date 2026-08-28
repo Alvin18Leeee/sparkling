@@ -652,6 +652,18 @@ fn atomic_save_leaves_no_tmp() {
     let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
     assert_eq!(files.len(), 1); // 只有 .sparkling，没有残留 tmp
 }
+
+#[test]
+fn inverted_segment_is_corrupt_not_panic() {
+    // 倒置区间（end < start）必须返回 CorruptControlFile，而不是 debug 构建下溢 panic
+    let dir = tempfile::tempdir().unwrap();
+    let final_path = dir.path().join("a.bin");
+    let mut cf = sample();
+    cf.segments[0] = Segment { index: 0, start: 10, end: 5, downloaded: 0 };
+    control_file::save(&final_path, &cf).unwrap();
+    let err = control_file::load(&control_file::path_for(&final_path)).unwrap_err();
+    assert!(matches!(err, sparkling_core::SparklingError::CorruptControlFile(_)));
+}
 ```
 
 - [ ] **Step 2: 运行验证失败**
@@ -702,11 +714,7 @@ pub fn save(final_path: &Path, cf: &ControlFile) -> Result<()> {
         .map_err(|e| SparklingError::DiskWrite(format!("控制文件序列化失败: {e}")))?;
     std::fs::write(&tmp, &data)
         .map_err(|e| SparklingError::DiskWrite(format!("控制文件写入失败: {e}")))?;
-    // Windows 上 rename 不覆盖已存在目标，先删
-    if ctl.exists() {
-        std::fs::remove_file(&ctl)
-            .map_err(|e| SparklingError::DiskWrite(format!("旧控制文件删除失败: {e}")))?;
-    }
+    // std::fs::rename 在 Windows 上是 MoveFileExW + REPLACE_EXISTING，直接覆盖
     std::fs::rename(&tmp, &ctl)
         .map_err(|e| SparklingError::DiskWrite(format!("控制文件落盘失败: {e}")))?;
     Ok(())
@@ -720,7 +728,8 @@ pub fn load(ctl_path: &Path) -> Result<ControlFile> {
     let cf: ControlFile = serde_json::from_slice(&raw)
         .map_err(|e| SparklingError::CorruptControlFile(format!("JSON 解析失败: {e}")))?;
     for seg in &cf.segments {
-        if seg.downloaded > seg.len() || seg.end < seg.start {
+        // 注意顺序：end < start 先判（短路），否则 len() 的 u64 减法在 debug 构建下溢 panic
+        if seg.end < seg.start || seg.downloaded > seg.len() {
             return Err(SparklingError::CorruptControlFile(format!(
                 "分片 {} 不变量破坏: downloaded={} len={}",
                 seg.index, seg.downloaded, seg.len()
@@ -790,6 +799,17 @@ mod throttle_tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn oversize_acquire_terminates_and_paces() {
+        // 限速低于单块大小（64 KiB）的场景：acquire 决不能挂死
+        let bucket = TokenBucket::new(Some(60_000)); // 60 KB/s
+        bucket.acquire(64 * 1024).await; // 初始满桶 60000 < 65536，须按差额等待
+        let t0 = tokio::time::Instant::now();
+        bucket.acquire(64 * 1024).await;
+        // 第二块按速率线性等待：65536/60000 ≈ 1.09s
+        assert!(t0.elapsed() >= std::time::Duration::from_millis(1000));
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn set_rate_takes_effect_immediately() {
         let bucket = TokenBucket::new(Some(10));
         bucket.set_rate(None);
@@ -846,26 +866,27 @@ impl TokenBucket {
     }
 
     /// 等待取得 `amount` 个令牌（字节数）。不限速时立即返回。
+    /// 支持 amount > rate（桶容量 = 1 秒配额）：按速率线性等待差额，等待期产生的
+    /// 令牌直接折算进等待时长，睡醒清零完成扣减——低速限速下大块请求不会挂死。
     pub async fn acquire(&self, amount: u64) {
-        loop {
-            let sleep_for = {
-                let mut g = self.inner.lock().unwrap();
-                let now = Instant::now();
-                let elapsed = now.duration_since(g.last).as_secs_f64();
-                g.last = now;
-                if g.rate == 0 {
-                    return; // 不限速
-                }
-                g.tokens = (g.tokens + elapsed * g.rate as f64).min(g.rate as f64);
-                if g.tokens >= amount as f64 {
-                    g.tokens -= amount as f64;
-                    return;
-                }
-                // 需要等待的时长（秒）
-                ((amount as f64 - g.tokens) / g.rate as f64).max(0.001)
-            };
-            tokio::time::sleep(std::time::Duration::from_secs_f64(sleep_for)).await;
-        }
+        let sleep_for = {
+            let mut g = self.inner.lock().unwrap();
+            let now = Instant::now();
+            let elapsed = now.duration_since(g.last).as_secs_f64();
+            g.last = now;
+            if g.rate == 0 {
+                return; // 不限速
+            }
+            g.tokens = (g.tokens + elapsed * g.rate as f64).min(g.rate as f64);
+            if g.tokens >= amount as f64 {
+                g.tokens -= amount as f64;
+                return;
+            }
+            ((amount as f64 - g.tokens) / g.rate as f64).max(0.001)
+        };
+        tokio::time::sleep(std::time::Duration::from_secs_f64(sleep_for)).await;
+        // 等待期间的令牌额度已折算进等待时长：清零即完成本次扣减
+        self.inner.lock().unwrap().tokens = 0.0;
     }
 }
 ```
