@@ -61,6 +61,8 @@ struct ServerState {
     v2: AtomicBool,
     /// 已处理（可被掐断计数）的响应数
     dropped: AtomicU64,
+    /// fail()/relax() 运行时切换：true 时对所有请求返回 500
+    force_fail: AtomicBool,
 }
 
 pub struct TestServer {
@@ -86,7 +88,7 @@ async fn handler(State(st): State<Arc<ServerState>>, req_headers: HeaderMap) -> 
         FailMode::Always5xx => true,
         FailMode::FailFirstN(k) => n < *k as u64,
         _ => false,
-    };
+    } || st.force_fail.load(Ordering::SeqCst);
     if fail {
         return (StatusCode::INTERNAL_SERVER_ERROR, "boom").into_response();
     }
@@ -216,6 +218,7 @@ pub async fn start(cfg: ServerConfig) -> TestServer {
         requests: AtomicU64::new(0),
         v2: AtomicBool::new(false),
         dropped: AtomicU64::new(0),
+        force_fail: AtomicBool::new(false),
     });
     let app = Router::new()
         .route("/file.bin", get(handler))
@@ -241,6 +244,14 @@ impl TestServer {
     pub fn current_sha256(&self) -> String {
         let v2 = self.state.v2.load(Ordering::SeqCst);
         sha256_hex(&content(self.state.cfg.size, v2))
+    }
+    /// 让服务器立刻开始对所有请求返回 500
+    pub fn fail(&self) {
+        self.state.force_fail.store(true, Ordering::SeqCst);
+    }
+    /// 解除 fail 状态
+    pub fn relax(&self) {
+        self.state.force_fail.store(false, Ordering::SeqCst);
     }
 }
 
@@ -334,5 +345,44 @@ pub async fn wait_until(
         if tokio::time::timeout_at(deadline, rx.changed()).await.is_err() {
             panic!("wait_until 超时（通道关闭）");
         }
+    }
+}
+
+use sparkling_core::manager::TaskEvent;
+use tokio::sync::broadcast;
+
+/// 轮询 manager 事件流直到指定任务出现目标状态或超时
+pub async fn wait_event_state(
+    rx: &mut broadcast::Receiver<TaskEvent>,
+    id: &str,
+    want: TaskState,
+    timeout: std::time::Duration,
+) -> TaskEvent {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let ev = match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Ok(ev)) => ev,
+            Ok(Err(_)) => panic!("事件通道关闭"),
+            Err(_) => panic!("等待事件状态 {want:?} 超时（id={id}）"),
+        };
+        if let TaskEvent::State { id: eid, state, .. } = &ev {
+            if eid == id && *state == want {
+                return ev;
+            }
+        }
+    }
+}
+
+/// 以 50ms 间隔轮询同步闭包直到其返回 Some 或超时
+pub async fn poll_until<T>(timeout: std::time::Duration, mut f: impl FnMut() -> Option<T>) -> T {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some(v) = f() {
+            return v;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("poll_until 超时");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }

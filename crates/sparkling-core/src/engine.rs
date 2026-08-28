@@ -19,6 +19,8 @@ pub struct ProgressSnapshot {
     pub speed: u64, // bytes/s
     pub segments: Vec<SegmentProgress>,
     pub error: Option<String>,
+    /// 引擎解析出的最终文件名（探测前 None；manager 落库供重启恢复/UI 展示）
+    pub filename: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,4 +68,6 @@ pub trait Engine: Send + Sync {
     async fn submit(&self, spec: TaskSpec) -> Result<TaskHandle>;
     /// 引擎级（全局）限速，默认空实现
     fn set_speed_limit(&self, _limit: Option<u64>) {}
+    /// 关停引擎：abort 所有运行中的下载（应用退出时调用）
+    fn shutdown(&self) {}
 }

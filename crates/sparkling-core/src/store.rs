@@ -96,9 +96,10 @@ impl TaskStore {
     }
 
     pub fn get_all(&self) -> Result<Vec<TaskRecord>> {
+        // rowid DESC 次序决胜：同秒创建的任务列表顺序稳定（D34）
         let mut stmt = self
             .conn
-            .prepare("SELECT * FROM tasks ORDER BY created_at DESC")
+            .prepare("SELECT * FROM tasks ORDER BY created_at DESC, rowid DESC")
             .map_err(|e| SparklingError::Other(format!("查询失败: {e}")))?;
         let rows = stmt
             .query_map([], Self::row_to_record)
@@ -127,6 +128,17 @@ impl TaskStore {
                 params![id, downloaded, total],
             )
             .map_err(|e| SparklingError::Other(format!("更新进度失败: {e}")))?;
+        Ok(())
+    }
+
+    /// 回填引擎解析出的文件名（探测完成后；重启恢复与 UI 展示依赖，D35）
+    pub fn update_filename(&self, id: &str, filename: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE tasks SET filename = ?2 WHERE id = ?1",
+                params![id, filename],
+            )
+            .map_err(|e| SparklingError::Other(format!("更新文件名失败: {e}")))?;
         Ok(())
     }
 
@@ -182,6 +194,17 @@ mod tests {
         assert_eq!(r.total_size, Some(67890));
         // 更新不存在的行不报错（幂等）
         store.update_state("nope", TaskState::Queued, None).unwrap();
+    }
+
+    #[test]
+    fn update_filename_roundtrip() {
+        let store = TaskStore::open_in_memory().unwrap();
+        store.insert(&rec("t1")).unwrap(); // rec 的 filename = Some("a.bin")
+        store.update_filename("t1", "resolved.bin").unwrap();
+        let r = store.get("t1").unwrap().unwrap();
+        assert_eq!(r.filename.as_deref(), Some("resolved.bin"));
+        // 更新不存在的行不报错（幂等）
+        store.update_filename("nope", "x.bin").unwrap();
     }
 
     #[test]

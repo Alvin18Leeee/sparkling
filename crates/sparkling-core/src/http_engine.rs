@@ -212,14 +212,19 @@ impl HttpEngine {
             retry_policy: retry,
         }
     }
+
+    /// 关停：abort 全部运行中的下载（Drop 同款逻辑，供应用退出主动调用）
+    pub fn shutdown(&self) {
+        for (_, h) in self.registry.lock().unwrap().drain() {
+            h.abort();
+        }
+    }
 }
 
 impl Drop for HttpEngine {
     fn drop(&mut self) {
         // 引擎销毁 → abort 全部下载（测试隔离、崩溃模拟）
-        for (_, h) in self.registry.lock().unwrap().drain() {
-            h.abort();
-        }
+        HttpEngine::shutdown(self);
     }
 }
 
@@ -234,6 +239,7 @@ impl Engine for HttpEngine {
             speed: 0,
             segments: vec![],
             error: None,
+            filename: None, // 探测完成后由 reporter 帧携带（D35）
         });
         let (control_tx, control_rx) = mpsc::unbounded_channel();
         let join = tokio::spawn(supervise(
@@ -252,6 +258,10 @@ impl Engine for HttpEngine {
 
     fn set_speed_limit(&self, limit: Option<u64>) {
         self.global_throttle.set_rate(limit);
+    }
+
+    fn shutdown(&self) {
+        HttpEngine::shutdown(self);
     }
 }
 
@@ -652,6 +662,7 @@ fn spawn_reporter(
                     speed: 0,
                     segments: shared.snapshot_segments(),
                     error: None,
+                    filename: Some(shared.filename.clone()),
                 });
                 break;
             }
@@ -684,6 +695,7 @@ fn spawn_reporter(
                     speed,
                     segments: shared.snapshot_segments(),
                     error: None,
+                    filename: Some(shared.filename.clone()),
                 })
                 .is_err()
             {
