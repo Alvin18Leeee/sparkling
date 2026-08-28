@@ -1763,11 +1763,12 @@ mod engine_tests {
     async fn probe_error_fails_task() {
         let server = start(ServerConfig { fail_mode: FailMode::Always5xx, ..Default::default() }).await;
         let dir = tempfile::tempdir().unwrap();
-        // 快速退避：probe 自带重试后默认策略需 31s，超出断言窗口（D32）
+        // 快速退避：probe 自带重试后默认策略需 31s，超出断言窗口（D32；
+        // fast 策略总退避 ~250ms，10s 窗口充裕）
         let e = HttpEngine::new_with_policy(None, RetryPolicy::fast());
         let handle = e.submit(spec(server.url.clone(), &dir)).await.unwrap();
         let mut rx = handle.subscribe();
-        let snap = wait_state(&mut rx, TaskState::Failed, Duration::from_secs(30)).await;
+        let snap = wait_state(&mut rx, TaskState::Failed, Duration::from_secs(10)).await;
         assert!(snap.error.unwrap().contains("500"));
     }
 }
