@@ -1,3 +1,4 @@
+pub mod control_file;
 pub mod error;
 pub mod segment;
 pub mod task;
