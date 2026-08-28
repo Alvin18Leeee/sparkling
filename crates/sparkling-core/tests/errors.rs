@@ -61,7 +61,9 @@ async fn persistent_5xx_fails_task() {
 async fn connection_drop_resumes_from_offset() {
     // 每个响应体发 512KB 后掐断：worker 每次从新偏移续传。
     // 注意 drop_after 必须显著大于 hyper 的写缓冲（实测 ~400KB）——
-    // 太小的限额客户端收到 0 字节，重试零进展，任务会 Failed 而非完成
+    // 太小的限额客户端收到 0 字节，重试零进展，任务会 Failed 而非完成。
+    // segments 必须为 2（每段 1MiB > 512KiB 限额）——8×256KiB 段小于限额时
+    // 掐断永远不会触发，测试空转（D33）
     let server = start(ServerConfig {
         size: 2 * 1024 * 1024,
         drop_after: Some(512 * 1024),
@@ -69,7 +71,9 @@ async fn connection_drop_resumes_from_offset() {
     }).await;
     let dir = tempfile::tempdir().unwrap();
     let engine = fast_engine();
-    let handle = engine.submit(spec(server.url.clone(), &dir)).await.unwrap();
+    let mut s = spec(server.url.clone(), &dir);
+    s.segments = 2;
+    let handle = engine.submit(s).await.unwrap();
     let mut rx = handle.subscribe();
     wait_state(&mut rx, TaskState::Completed, Duration::from_secs(60)).await;
     let file = std::fs::read(dir.path().join("file.bin")).unwrap();
@@ -78,12 +82,18 @@ async fn connection_drop_resumes_from_offset() {
 
 #[tokio::test]
 async fn no_range_drop_restarts_from_zero() {
-    // 不支持 Range + 第一次响应掐断 → 从头重下并完成
+    // 不支持 Range + 前两次响应掐断（probe 一次 + 首个 body 一次）→
+    // 顺序路径中途断连后从头重下并完成。
+    // drop_first_n = 2 是关键：只掐一次会被 probe 消耗掉，顺序重置路径不被行使（D33）。
+    // drop_after 必须大于 hyper 写缓冲（实测 ~120-160KiB）：100_000 级别的掐断连
+    // 响应头都送不到客户端，probe 直接失败、两次掐断都被探测重试吃掉（实测
+    // 4 请求、进度直达满值——空转）；512KiB 时 probe 拿得到头，body 请求在
+    // ~383KiB 处断掉，实测进度时间线 …392623 → 24444… 清零后重爬到满值。
     let server = start(ServerConfig {
-        size: 256 * 1024,
+        size: 1024 * 1024,
         support_range: false,
-        drop_after: Some(100_000),
-        drop_only_first: true,
+        drop_after: Some(512 * 1024),
+        drop_first_n: 2,
         ..Default::default()
     }).await;
     let dir = tempfile::tempdir().unwrap();

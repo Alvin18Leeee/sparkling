@@ -34,8 +34,9 @@ pub struct ServerConfig {
     pub slow_first_half: Option<Duration>,
     /// 响应体发送 N 字节后掐断连接
     pub drop_after: Option<u64>,
-    /// 只掐断第一次响应（探测请求也算一次——验证 no-range 从头重下）
-    pub drop_only_first: bool,
+    /// 只掐前 N 个响应（0 = 每个响应都掐；probe 也占一个名额，
+    /// 要掐到 body 请求须 N ≥ 2）
+    pub drop_first_n: u32,
     /// 覆盖 Content-Disposition
     pub disposition: Option<String>,
 }
@@ -48,7 +49,7 @@ impl Default for ServerConfig {
             fail_mode: FailMode::None,
             slow_first_half: None,
             drop_after: None,
-            drop_only_first: false,
+            drop_first_n: 0,
             disposition: None,
         }
     }
@@ -58,8 +59,8 @@ struct ServerState {
     cfg: ServerConfig,
     requests: AtomicU64,
     v2: AtomicBool,
-    /// drop_only_first 已掐断过一次
-    dropped: AtomicBool,
+    /// 已处理（可被掐断计数）的响应数
+    dropped: AtomicU64,
 }
 
 pub struct TestServer {
@@ -163,9 +164,10 @@ async fn handler(State(st): State<Arc<ServerState>>, req_headers: HeaderMap) -> 
     resp_headers.insert("content-md5", HeaderValue::from_str(&digest).unwrap());
 
     // 流式分块（64KiB）：drop_after 模式精确发送 limit 字节后以错误掐断；普通模式全量发送。
-    // drop_only_first：只掐断第一次到达此处的响应（swap 一次性消耗）
-    let should_drop = cfg.drop_after.is_some()
-        && (!cfg.drop_only_first || !st.dropped.swap(true, Ordering::SeqCst));
+    // drop_first_n = 0 → 每个响应都掐；> 0 → 只掐前 N 个（probe 也占名额）
+    let n = st.dropped.fetch_add(1, Ordering::SeqCst);
+    let should_drop =
+        cfg.drop_after.is_some() && (cfg.drop_first_n == 0 || n < cfg.drop_first_n as u64);
     let drop_after = if should_drop { cfg.drop_after } else { None };
     let chunk_size = 64 * 1024usize;
     let chunks: Vec<Result<Vec<u8>, std::io::Error>> = if let Some(limit) = drop_after {
@@ -213,7 +215,7 @@ pub async fn start(cfg: ServerConfig) -> TestServer {
         cfg: cfg.clone(),
         requests: AtomicU64::new(0),
         v2: AtomicBool::new(false),
-        dropped: AtomicBool::new(false),
+        dropped: AtomicU64::new(0),
     });
     let app = Router::new()
         .route("/file.bin", get(handler))
