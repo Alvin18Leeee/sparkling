@@ -1237,7 +1237,13 @@ async fn handler(State(st): State<Arc<ServerState>>, req_headers: HeaderMap) -> 
         );
     }
     // Content-MD5：默认给正确值，WrongMd5 模式给别的文件的哈希
-    let md5_of = if matches!(cfg.fail_mode, FailMode::WrongMd5) { content(cfg.size, !v2) } else { slice.clone() };
+    // Content-MD5 是整个实体（文件）的摘要（RFC 1864），而非本次响应切片——
+    // 206 与 200 响应都携带同一个全文件摘要（D31：切片摘要在多线程下必校验失败）
+    let md5_of = if matches!(cfg.fail_mode, FailMode::WrongMd5) {
+        content(cfg.size, !v2)
+    } else {
+        content(cfg.size, v2)
+    };
     use md5::{Digest, Md5};
     let digest = base64::engine::general_purpose::STANDARD
         .encode(Md5::digest(&md5_of));
@@ -1757,10 +1763,11 @@ mod engine_tests {
     async fn probe_error_fails_task() {
         let server = start(ServerConfig { fail_mode: FailMode::Always5xx, ..Default::default() }).await;
         let dir = tempfile::tempdir().unwrap();
-        let e = engine().await;
+        // 快速退避：probe 自带重试后默认策略需 31s，超出断言窗口（D32）
+        let e = HttpEngine::new_with_policy(None, RetryPolicy::fast());
         let handle = e.submit(spec(server.url.clone(), &dir)).await.unwrap();
         let mut rx = handle.subscribe();
-        let snap = wait_state(&mut rx, TaskState::Failed, Duration::from_secs(10)).await;
+        let snap = wait_state(&mut rx, TaskState::Failed, Duration::from_secs(30)).await;
         assert!(snap.error.unwrap().contains("500"));
     }
 }
@@ -3280,12 +3287,12 @@ git commit -m "feat(core): 暂停恢复、断点续传、崩溃恢复与 ETag �
 **Files:**
 - Modify: `crates/sparkling-core/src/http_engine.rs`（`with_retry` 包装探测、`finalize` 增加 MD5 校验、416 处理、顺序 worker 修正）
 - Modify: `crates/sparkling-core/src/probe.rs`（416 → 退回无 Range 探测）
-- Modify: `crates/sparkling-core/tests/common/mod.rs`（`drop_only_first: bool`）
+- Modify: `crates/sparkling-core/tests/common/mod.rs`（`drop_first_n: u32`）
 - Test: `crates/sparkling-core/tests/errors.rs`
 
 **Interfaces:**
 - Consumes: `RetryPolicy`（Task 8）、`drive_download`（Task 11）
-- Produces: `with_retry(retry, f)` 泛型重试包装；`finalize` 的 Content-MD5 校验（不匹配 → `ChecksumMismatch`，**不产出正式文件**，`.part` 保留排查）；probe 收到 416 时退回 plain GET（视为不支持 Range）；`fetch_range` 对 416 → 重置该分片从头下（计入重试）。测试服务器新增 `drop_only_first`（只掐断第一次响应，用于验证 no-range 从头重下）。
+- Produces: `with_retry(retry, f)` 泛型重试包装；`finalize` 的 Content-MD5 校验（不匹配 → `ChecksumMismatch`，**不产出正式文件**，`.part` 保留排查）；probe 收到 416 时退回 plain GET（视为不支持 Range）；`fetch_range` 对 416 → 重置该分片从头下（计入重试）。测试服务器新增 `drop_first_n`（只掐前 N 个响应，probe 占用一个名额）。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -3354,7 +3361,9 @@ async fn persistent_5xx_fails_task() {
 async fn connection_drop_resumes_from_offset() {
     // 每个响应体发 512KB 后掐断：worker 每次从新偏移续传。
     // 注意 drop_after 必须显著大于 hyper 的写缓冲（实测 ~400KB）——
-    // 太小的限额客户端收到 0 字节，重试零进展，任务会 Failed 而非完成
+    // 太小的限额客户端收到 0 字节，重试零进展，任务会 Failed 而非完成。
+    // segments 必须为 2（每段 1MiB > 512KiB 限额）——8×256KiB 段小于限额时
+    // 掐断永远不会触发，测试空转（D33）
     let server = start(ServerConfig {
         size: 2 * 1024 * 1024,
         drop_after: Some(512 * 1024),
@@ -3362,7 +3371,9 @@ async fn connection_drop_resumes_from_offset() {
     }).await;
     let dir = tempfile::tempdir().unwrap();
     let engine = fast_engine();
-    let handle = engine.submit(spec(server.url.clone(), &dir)).await.unwrap();
+    let mut s = spec(server.url.clone(), &dir);
+    s.segments = 2;
+    let handle = engine.submit(s).await.unwrap();
     let mut rx = handle.subscribe();
     wait_state(&mut rx, TaskState::Completed, Duration::from_secs(60)).await;
     let file = std::fs::read(dir.path().join("file.bin")).unwrap();
@@ -3371,12 +3382,14 @@ async fn connection_drop_resumes_from_offset() {
 
 #[tokio::test]
 async fn no_range_drop_restarts_from_zero() {
-    // 不支持 Range + 第一次响应掐断 → 从头重下并完成
+    // 不支持 Range + 前两次响应掐断（probe 一次 + 首个 body 一次）→
+    // 顺序路径中途断连后从头重下并完成。
+    // drop_first_n = 2 是关键：只掐一次会被 probe 消耗掉，顺序重置路径不被行使（D33）
     let server = start(ServerConfig {
         size: 256 * 1024,
         support_range: false,
         drop_after: Some(100_000),
-        drop_only_first: true,
+        drop_first_n: 2,
         ..Default::default()
     }).await;
     let dir = tempfile::tempdir().unwrap();
@@ -3423,16 +3436,17 @@ async fn wrong_md5_fails_without_producing_file() {
 - [ ] **Step 2: 运行验证失败**
 
 Run: `cargo test -p sparkling-core --test errors`
-Expected: 编译失败（`drop_only_first` 字段不存在）或各用例 FAIL
+Expected: 编译失败（`drop_first_n` 字段不存在）或各用例 FAIL
 
 - [ ] **Step 3: 写实现**
 
-(a) `tests/common/mod.rs`：`ServerConfig` 增加字段 `pub drop_only_first: bool`（`Default` 里置 `false`）；`ServerState` 增加 `dropped: AtomicBool`；`handler` 中 drop 分支改为：
+(a) `tests/common/mod.rs`：`ServerConfig` 增加字段 `pub drop_first_n: u32`（`Default` 里置 `0` = 每个响应都掐；> 0 = 只掐前 N 个响应——注意 probe 也是一次请求，要掐到 body 须 N ≥ 2）；`ServerState` 增加 `dropped: AtomicU64`（已掐响应计数）；`handler` 中 drop 分支改为：
 
 ```rust
 // 在计算 bounded 截断前：
+let n = st.dropped.fetch_add(1, Ordering::SeqCst);
 let should_drop = cfg.drop_after.is_some()
-    && (!cfg.drop_only_first || !st.dropped.swap(true, Ordering::SeqCst));
+    && (cfg.drop_first_n == 0 || n < cfg.drop_first_n as u64);
 let drop_after = if should_drop { cfg.drop_after } else { None };
 // 后续截断逻辑用这个本地 drop_after（原 cfg.drop_after 全部替换）
 ```
