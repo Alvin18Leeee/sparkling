@@ -728,11 +728,14 @@ pub fn load(ctl_path: &Path) -> Result<ControlFile> {
     let cf: ControlFile = serde_json::from_slice(&raw)
         .map_err(|e| SparklingError::CorruptControlFile(format!("JSON 解析失败: {e}")))?;
     for seg in &cf.segments {
-        // 注意顺序：end < start 先判（短路），否则 len() 的 u64 减法在 debug 构建下溢 panic
+        // 注意顺序：end < start 先判（短路），否则 len() 的 u64 减法在 debug 构建下溢 panic；
+        // 错误消息同样不能用 len()（消息参数对倒置区间仍会求值）——用 saturating 计算
         if seg.end < seg.start || seg.downloaded > seg.len() {
             return Err(SparklingError::CorruptControlFile(format!(
                 "分片 {} 不变量破坏: downloaded={} len={}",
-                seg.index, seg.downloaded, seg.len()
+                seg.index,
+                seg.downloaded,
+                seg.end.saturating_sub(seg.start) + 1
             )));
         }
     }
