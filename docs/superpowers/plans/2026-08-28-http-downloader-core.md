@@ -162,7 +162,7 @@ edition = "2021"
 use thiserror::Error;
 
 /// 统一错误类型：user_message() 给用户看（中文），technical() 给详情面板看。
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum SparklingError {
     #[error("网络错误: {0}")]
     Network(String),
@@ -2384,6 +2384,7 @@ git commit -m "feat(core): HttpEngine 骨架、单线程降级与磁盘检查"
 mod common;
 
 use common::{sha256_hex, start, wait_state, wait_until, ServerConfig};
+use sparkling_core::engine::Engine; // submit 在 trait 上
 use sparkling_core::http_engine::HttpEngine;
 use sparkling_core::task::{TaskSpec, TaskState};
 use std::time::Duration;
