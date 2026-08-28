@@ -109,6 +109,37 @@ mod throttle_tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn sustained_pacing_not_double_credit() {
+        // 持续限速不得双倍计费：10 × 500B @ 1000B/s 应耗时 ~5s（双计费只花 2.5s）
+        let bucket = TokenBucket::new(Some(1000));
+        bucket.acquire(1000).await; // 排空初始配额
+        let t0 = tokio::time::Instant::now();
+        for _ in 0..10 {
+            bucket.acquire(500).await;
+        }
+        assert!(t0.elapsed() >= std::time::Duration::from_secs(5));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(7)); // 上界兼防挂死回归
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_acquires_do_not_overadmit() {
+        // 并发请求不得共享同一段额度：4 × 500B @ 1000B/s 应耗时 ~2s（过度放行会显著更短）
+        use std::sync::Arc;
+        let bucket = Arc::new(TokenBucket::new(Some(1000)));
+        bucket.acquire(1000).await; // 排空初始配额
+        let t0 = tokio::time::Instant::now();
+        let mut joins = Vec::new();
+        for _ in 0..4 {
+            let b = bucket.clone();
+            joins.push(tokio::spawn(async move { b.acquire(500).await }));
+        }
+        for j in joins {
+            j.await.unwrap();
+        }
+        assert!(t0.elapsed() >= std::time::Duration::from_secs(2));
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn set_rate_takes_effect_immediately() {
         let bucket = TokenBucket::new(Some(10));
         bucket.set_rate(None);
