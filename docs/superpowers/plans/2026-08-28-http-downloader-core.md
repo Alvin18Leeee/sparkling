@@ -3784,7 +3784,7 @@ impl TaskStore {
     pub fn get_all(&self) -> Result<Vec<TaskRecord>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT * FROM tasks ORDER BY created_at DESC")
+            .prepare("SELECT * FROM tasks ORDER BY created_at DESC, rowid DESC")
             .map_err(|e| SparklingError::Other(format!("查询失败: {e}")))?;
         let rows = stmt
             .query_map([], Self::row_to_record)
