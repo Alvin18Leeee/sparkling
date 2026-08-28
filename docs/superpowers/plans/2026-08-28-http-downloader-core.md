@@ -134,6 +134,8 @@ async-trait = "0.1"
 fs2 = "0.4"
 percent-encoding = "2"
 tracing = "0.1"
+# write_stream 的 Stream 泛型约束需要（Task 8 起 src 内使用）
+futures = "0.3"
 
 [dev-dependencies]
 # start_paused 测试需要 test-util（不在 full 里）
@@ -141,7 +143,6 @@ tokio = { version = "1", features = ["test-util"] }
 axum = "0.7"
 tempfile = "3"
 sha2 = "0.10"
-futures = "0.3"
 ```
 
 根 `Cargo.toml`：
@@ -1461,9 +1462,9 @@ pub enum ControlMsg {
 /// 提交后返回的任务句柄；Clone 后可多方持有（manager、事件转发等）
 #[derive(Clone)]
 pub struct TaskHandle {
-    id: TaskId,
-    progress: watch::Receiver<ProgressSnapshot>,
-    control: mpsc::UnboundedSender<ControlMsg>,
+    pub(crate) id: TaskId,
+    pub(crate) progress: watch::Receiver<ProgressSnapshot>,
+    pub(crate) control: mpsc::UnboundedSender<ControlMsg>,
 }
 
 impl TaskHandle {
@@ -1722,9 +1723,12 @@ mod engine_tests {
 
     #[tokio::test]
     async fn disposition_filename_used() {
+        // support_range: false——本测试主题是文件名解析，走顺序路径，
+        // 不依赖 Task 9 才实现的多线程分支（ASCII 文件名，D21 先例：中文头无法往返）
         let server = start(ServerConfig {
             size: 100,
-            disposition: Some("报告 q4.zip".into()),
+            support_range: false,
+            disposition: Some("report q4.zip".into()),
             ..Default::default()
         }).await;
         let dir = tempfile::tempdir().unwrap();
@@ -1732,12 +1736,13 @@ mod engine_tests {
         let handle = e.submit(spec(server.url.clone(), &dir)).await.unwrap();
         let mut rx = handle.subscribe();
         wait_state(&mut rx, TaskState::Completed, Duration::from_secs(10)).await;
-        assert!(dir.path().join("报告 q4.zip").exists());
+        assert!(dir.path().join("report q4.zip").exists());
     }
 
     #[tokio::test]
     async fn user_filename_overrides() {
-        let server = start(ServerConfig { size: 100, ..Default::default() }).await;
+        // support_range: false 同上——用户指定文件名的主题不依赖多线程分支
+        let server = start(ServerConfig { size: 100, support_range: false, ..Default::default() }).await;
         let dir = tempfile::tempdir().unwrap();
         let e = engine().await;
         let mut s = spec(server.url.clone(), &dir);
