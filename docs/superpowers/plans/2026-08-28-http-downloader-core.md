@@ -1288,6 +1288,16 @@ impl TestServer {
 
 **编译提示**：`handler` 里调用 `.encode()` 前需要 trait 在作用域内——文件顶部加 `use base64::Engine as _;`，md5 摘要用 `use md5::{Digest, Md5};`（`Md5::digest` 同样需要 `Digest` trait）。
 
+**测试目标声明**：cargo 不会自动发现 `tests/common/mod.rs`（子目录文件只能经 `mod common;` 引入）。要在本任务直接运行冒烟测试，需在 `crates/sparkling-core/Cargo.toml` 增加：
+
+```toml
+[[test]]
+name = "common"
+path = "tests/common/mod.rs"
+```
+
+副作用：后续测试文件 `mod common;` 时会把冒烟测试一并编进各自 target（多跑一次，无害）。
+
 - [ ] **Step 4: 运行验证通过**
 
 Run: `cargo test -p sparkling-core --test common`
@@ -3258,10 +3268,12 @@ async fn persistent_5xx_fails_task() {
 
 #[tokio::test]
 async fn connection_drop_resumes_from_offset() {
-    // 每个响应体发 100KB 后掐断：worker 每次从新偏移续传
+    // 每个响应体发 512KB 后掐断：worker 每次从新偏移续传。
+    // 注意 drop_after 必须显著大于 hyper 的写缓冲（实测 ~400KB）——
+    // 太小的限额客户端收到 0 字节，重试零进展，任务会 Failed 而非完成
     let server = start(ServerConfig {
-        size: 1024 * 1024,
-        drop_after: Some(100_000),
+        size: 2 * 1024 * 1024,
+        drop_after: Some(512 * 1024),
         ..Default::default()
     }).await;
     let dir = tempfile::tempdir().unwrap();
