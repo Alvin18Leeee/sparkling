@@ -3384,11 +3384,13 @@ async fn connection_drop_resumes_from_offset() {
 async fn no_range_drop_restarts_from_zero() {
     // 不支持 Range + 前两次响应掐断（probe 一次 + 首个 body 一次）→
     // 顺序路径中途断连后从头重下并完成。
-    // drop_first_n = 2 是关键：只掐一次会被 probe 消耗掉，顺序重置路径不被行使（D33）
+    // drop_first_n = 2 是关键：只掐一次会被 probe 消耗掉，顺序重置路径不被行使（D33）。
+    // drop_after 必须 ≥ 512KiB：实测 ~120-160KiB 以下的截断连响应头都送不出去，
+    // probe 直接失败 → with_retry 吃掉两个掐断名额，测试仍然空转
     let server = start(ServerConfig {
-        size: 256 * 1024,
+        size: 1024 * 1024,
         support_range: false,
-        drop_after: Some(100_000),
+        drop_after: Some(512 * 1024),
         drop_first_n: 2,
         ..Default::default()
     }).await;
