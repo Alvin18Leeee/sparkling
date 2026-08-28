@@ -136,6 +136,8 @@ percent-encoding = "2"
 tracing = "0.1"
 
 [dev-dependencies]
+# start_paused 测试需要 test-util（不在 full 里）
+tokio = { version = "1", features = ["test-util"] }
 axum = "0.7"
 tempfile = "3"
 sha2 = "0.10"
@@ -446,7 +448,8 @@ fn split_huge() {
     let segs = split(u64::MAX, 8);
     assert_eq!(segs.len(), 8);
     assert_eq!(segs[0].start, 0);
-    assert_eq!(segs[7].end, u64::MAX);
+    // 含端点语义：sum == u64::MAX，但末段 end == u64::MAX - 1（end+1 才是总字节）
+    assert_eq!(segs[7].end, u64::MAX - 1);
     let total: u128 = segs.iter().map(|s| s.len() as u128).sum();
     assert_eq!(total, u64::MAX as u128);
 }
