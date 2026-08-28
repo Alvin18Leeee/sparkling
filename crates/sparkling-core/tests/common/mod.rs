@@ -95,6 +95,16 @@ async fn handler(State(st): State<Arc<ServerState>>, req_headers: HeaderMap) -> 
         return (StatusCode::RANGE_NOT_SATISFIABLE, "bad range").into_response();
     }
 
+    // 空文件：直接 200 + 空 body（size-1 下溢守卫，Task 8 空文件测试依赖）
+    if cfg.size == 0 {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ETAG,
+            HeaderValue::from_str(if v2 { "\"v2\"" } else { "\"v1\"" }).unwrap(),
+        );
+        return (StatusCode::OK, headers, Body::empty()).into_response();
+    }
+
     let is_partial = cfg.support_range && range.is_some();
     let (start, end) = match range {
         Some((a, b)) if cfg.support_range => (a, b.min(cfg.size - 1)),
@@ -237,5 +247,19 @@ mod tests {
         assert_eq!(part.headers()["content-range"], "bytes 100-199/10000");
         assert_eq!(part.bytes().await.unwrap().len(), 100);
         assert_eq!(server.data.len(), 10_000);
+    }
+
+    #[tokio::test]
+    async fn server_serves_empty_file() {
+        // 空文件不 panic：Range 探测也回 200 空 body（Task 8 空文件测试依赖）
+        let server = start(ServerConfig { size: 0, ..Default::default() }).await;
+        let resp = reqwest::Client::new()
+            .get(&server.url)
+            .header("Range", "bytes=0-0")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.bytes().await.unwrap().len(), 0);
     }
 }
