@@ -5132,6 +5132,9 @@ export default function App() {
       const p = ev.payload;
       if (p.kind === 'Progress') {
         speeds.current.set(p.id, p.speed);
+      } else if (p.state !== 'running') {
+        // 暂停/终态的速度不再计入总速度（paused 快照携带旧速度且 reporter 已静默）
+        speeds.current.delete(p.id);
       }
       // 状态/进度最终以 list_tasks 为准，事件触发即时刷新
       refresh();
