@@ -13,6 +13,7 @@ pub struct ProbeResult {
 
 /// 探测：GET + Range: bytes=0-0。
 /// 206 → 支持 Range（Content-Range 尾段是总大小）；200 → 不支持。
+/// 416 → 服务器对 Range=0-0 都拒绝（Range 实现有问题）→ 退回无 Range 探测，视为不支持。
 /// 未提供文件大小的服务器暂不支持（已知限制，spec 范围外）。
 pub async fn probe(client: &reqwest::Client, url: &str) -> Result<ProbeResult> {
     let resp = client
@@ -21,6 +22,12 @@ pub async fn probe(client: &reqwest::Client, url: &str) -> Result<ProbeResult> {
         .send()
         .await
         .map_err(|e| SparklingError::Network(e.to_string()))?;
+    // 服务器对 Range=0-0 也回 416：Range 实现有问题 → 退回无 Range 探测
+    let resp = if resp.status().as_u16() == 416 {
+        client.get(url).send().await.map_err(|e| SparklingError::Network(e.to_string()))?
+    } else {
+        resp
+    };
     let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
         return Err(SparklingError::HttpStatus { status, detail: format!("探测失败: {url}") });

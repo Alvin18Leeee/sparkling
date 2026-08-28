@@ -146,7 +146,13 @@ mod engine_tests {
     async fn probe_error_fails_task() {
         let server = start(ServerConfig { fail_mode: FailMode::Always5xx, ..Default::default() }).await;
         let dir = tempfile::tempdir().unwrap();
-        let e = engine().await;
+        // Task 12 起探测复用任务重试策略：默认策略的退避全程 31s，
+        // 超出本测试 10s 等待窗口——改用 fast 策略，断言意图不变
+        // （持续 5xx → 重试耗尽 → Failed 且消息含 500）
+        let e = sparkling_core::http_engine::HttpEngine::new_with_policy(
+            None,
+            sparkling_core::http_engine::RetryPolicy::fast(),
+        );
         let handle = e.submit(spec(server.url.clone(), &dir)).await.unwrap();
         let mut rx = handle.subscribe();
         let snap = wait_state(&mut rx, TaskState::Failed, Duration::from_secs(10)).await;

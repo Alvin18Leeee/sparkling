@@ -49,6 +49,27 @@ impl RetryPolicy {
     }
 }
 
+/// 带重试的执行器（探测等单次请求复用分片重试策略）
+async fn with_retry<T, F, Fut>(retry: &RetryPolicy, mut f: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut attempt = 0u32;
+    loop {
+        match f().await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                attempt += 1;
+                if attempt > retry.max_retries {
+                    return Err(e);
+                }
+                tokio::time::sleep(retry.backoff(attempt)).await;
+            }
+        }
+    }
+}
+
 /// worker 的退出原因
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkerExit {
@@ -272,8 +293,10 @@ async fn run_download(
     progress_tx: &watch::Sender<ProgressSnapshot>,
     control_rx: &mut mpsc::UnboundedReceiver<ControlMsg>,
 ) -> std::result::Result<(), DownloadEnd> {
-    // 1. 探测
-    let probe = probe::probe(client, &spec.url).await.map_err(DownloadEnd::Failed)?;
+    // 1. 探测（复用任务重试策略：瞬时 5xx / 连接抖动可自愈）
+    let probe = with_retry(retry, || probe::probe(client, &spec.url))
+        .await
+        .map_err(DownloadEnd::Failed)?;
     let filename = spec.filename.clone().unwrap_or_else(|| probe.filename.clone());
     let final_path = spec.save_dir.join(&filename);
     let part_path = part_path_for(&final_path);
@@ -687,12 +710,23 @@ async fn sequential_worker(
         if seg.remaining() == 0 {
             return Ok(WorkerExit::Done);
         }
-        let resp = match fetch_range(client, &spec.url, seg.next_offset(), Some(seg.end)).await {
+        // 不支持 Range：只发 plain GET；中断只能从头
+        let resp = match if shared.probe.supports_range {
+            fetch_range(client, &spec.url, seg.next_offset(), Some(seg.end)).await
+        } else {
+            fetch_range(client, &spec.url, 0, None).await
+        } {
             Ok(r) => r,
             Err(e) => {
                 attempt += 1;
                 if attempt > retry.max_retries {
                     return Err(e);
+                }
+                if !shared.probe.supports_range {
+                    // 从头重下：清零进度
+                    let done = shared.downloaded.swap(0, Ordering::Relaxed);
+                    let _ = done;
+                    shared.add_progress(0, 0, 0);
                 }
                 tokio::time::sleep(retry.backoff(attempt)).await;
                 continue;
@@ -770,6 +804,13 @@ async fn segment_worker(
                 continue;
             }
             Err(e) => {
+                // 416：Range 失效（例如服务器端状态漂移）→ 重置该分片从头下
+                if matches!(e, SparklingError::HttpStatus { status: 416, .. }) {
+                    let waste = seg.downloaded;
+                    seg.downloaded = 0;
+                    shared.add_progress(seg.index, 0, 0);
+                    let _ = waste;
+                }
                 attempt += 1;
                 if attempt > retry.max_retries {
                     shared.fail(e.clone());
@@ -904,13 +945,17 @@ async fn fetch_range(
     }
     let resp = req.send().await.map_err(|e| SparklingError::Network(e.to_string()))?;
     let status = resp.status().as_u16();
+    if status == 416 {
+        return Err(SparklingError::HttpStatus { status, detail: "Range 不可满足，将重置分片".into() });
+    }
     if !(200..300).contains(&status) {
         return Err(SparklingError::HttpStatus { status, detail: format!("GET 失败: {url}") });
     }
     Ok(resp)
 }
 
-/// 收尾：总量校验 → rename → 清理控制文件（Content-MD5 校验在 Task 12 接入）
+/// 收尾：总量校验 → Content-MD5 校验 → rename → 清理控制文件。
+/// MD5 不匹配 → ChecksumMismatch，**不产出正式文件**（.part 保留供排查）。
 fn finalize(
     shared: &Arc<Shared>,
     final_path: &Path,
@@ -923,6 +968,30 @@ fn finalize(
             shared.downloaded.load(Ordering::Relaxed),
             shared.probe.total
         )));
+    }
+    // Content-MD5（若服务器提供）：不匹配则不产出正式文件
+    if let Some(expected) = &shared.probe.content_md5 {
+        use md5::{Digest, Md5};
+        use base64::Engine as _;
+        let mut h = Md5::new();
+        let mut f = std::fs::File::open(part_path)
+            .map_err(|e| SparklingError::DiskWrite(e.to_string()))?;
+        let mut buf = vec![0u8; 64 * 1024];
+        use std::io::Read;
+        loop {
+            let n = f.read(&mut buf).map_err(|e| SparklingError::DiskWrite(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            h.update(&buf[..n]);
+        }
+        let actual = base64::engine::general_purpose::STANDARD.encode(h.finalize());
+        if actual != *expected {
+            return Err(SparklingError::ChecksumMismatch {
+                expected: expected.clone(),
+                actual,
+            });
+        }
     }
     // 同名覆盖：完成同名文件视为用户覆盖意图
     if final_path.exists() {

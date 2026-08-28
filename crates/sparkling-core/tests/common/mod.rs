@@ -34,6 +34,8 @@ pub struct ServerConfig {
     pub slow_first_half: Option<Duration>,
     /// 响应体发送 N 字节后掐断连接
     pub drop_after: Option<u64>,
+    /// 只掐断第一次响应（探测请求也算一次——验证 no-range 从头重下）
+    pub drop_only_first: bool,
     /// 覆盖 Content-Disposition
     pub disposition: Option<String>,
 }
@@ -46,6 +48,7 @@ impl Default for ServerConfig {
             fail_mode: FailMode::None,
             slow_first_half: None,
             drop_after: None,
+            drop_only_first: false,
             disposition: None,
         }
     }
@@ -55,6 +58,8 @@ struct ServerState {
     cfg: ServerConfig,
     requests: AtomicU64,
     v2: AtomicBool,
+    /// drop_only_first 已掐断过一次
+    dropped: AtomicBool,
 }
 
 pub struct TestServer {
@@ -145,18 +150,23 @@ async fn handler(State(st): State<Arc<ServerState>>, req_headers: HeaderMap) -> 
             HeaderValue::from_str(&format!("attachment; filename=\"{d}\"")).unwrap(),
         );
     }
-    // Content-MD5：默认给正确值，WrongMd5 模式给别的文件的哈希
+    // Content-MD5：完整文件的哈希（Task 12 finalize 对拼装后的 .part 整体校验，
+    // 探测请求是 Range:0-0 的 206——按 slice 给的话探测头永远对不上全文件）。
+    // WrongMd5 模式给另一个版本内容的哈希
     let md5_of = if matches!(cfg.fail_mode, FailMode::WrongMd5) {
         content(cfg.size, !v2)
     } else {
-        slice.clone()
+        data.clone()
     };
     use md5::{Digest, Md5};
     let digest = base64::engine::general_purpose::STANDARD.encode(Md5::digest(&md5_of));
     resp_headers.insert("content-md5", HeaderValue::from_str(&digest).unwrap());
 
-    // 流式分块（64KiB）：drop_after 模式精确发送 limit 字节后以错误掐断；普通模式全量发送
-    let drop_after = cfg.drop_after;
+    // 流式分块（64KiB）：drop_after 模式精确发送 limit 字节后以错误掐断；普通模式全量发送。
+    // drop_only_first：只掐断第一次到达此处的响应（swap 一次性消耗）
+    let should_drop = cfg.drop_after.is_some()
+        && (!cfg.drop_only_first || !st.dropped.swap(true, Ordering::SeqCst));
+    let drop_after = if should_drop { cfg.drop_after } else { None };
     let chunk_size = 64 * 1024usize;
     let chunks: Vec<Result<Vec<u8>, std::io::Error>> = if let Some(limit) = drop_after {
         let mut bounded: Vec<Result<Vec<u8>, std::io::Error>> = Vec::new();
@@ -203,6 +213,7 @@ pub async fn start(cfg: ServerConfig) -> TestServer {
         cfg: cfg.clone(),
         requests: AtomicU64::new(0),
         v2: AtomicBool::new(false),
+        dropped: AtomicBool::new(false),
     });
     let app = Router::new()
         .route("/file.bin", get(handler))
