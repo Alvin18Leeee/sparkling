@@ -1221,6 +1221,8 @@ impl TestServer {
 
 同时删掉 Step 1 骨架里的 `headers_contains_range` 与示意 handler（被上面替换），`parse_range` 保留。`Cargo.toml` dev-dependencies 已含 `md-5`（主依赖，测试可用）与 `futures`。
 
+**编译提示**：`handler` 里调用 `.encode()` 前需要 trait 在作用域内——文件顶部加 `use base64::Engine as _;`，md5 摘要用 `use md5::{Digest, Md5};`（`Md5::digest` 同样需要 `Digest` trait）。
+
 - [ ] **Step 4: 运行验证通过**
 
 Run: `cargo test -p sparkling-core --test common`
@@ -1802,15 +1804,29 @@ impl Shared {
         self.segments.lock().unwrap().iter().find(|s| s.index == index).cloned().expect("分片存在")
     }
 
-    /// 更新某分片进度并累加总进度
-    fn add_progress(&self, index: usize, downloaded: u64, delta: u64) {
-        {
+    /// 更新某分片进度并重算总进度。
+    /// 关键不变量：总 downloaded = 各分片 downloaded 之和（派生），单段 clamp 到当前 len ——
+    /// 偷段会收缩 victim 的 end，在途 worker 的多余写入不会污染总量。
+    fn add_progress(&self, index: usize, downloaded: u64, _delta: u64) {
+        let sum = {
             let mut g = self.segments.lock().unwrap();
             if let Some(s) = g.iter_mut().find(|s| s.index == index) {
-                s.downloaded = downloaded;
+                s.downloaded = downloaded.min(s.len());
             }
-        }
-        self.downloaded.fetch_add(delta, Ordering::Relaxed);
+            g.iter().map(|s| s.downloaded).sum()
+        };
+        self.downloaded.store(sum, Ordering::Relaxed);
+    }
+
+    /// 共享表中该段当前长度（偷段会实时收缩）
+    fn segment_len(&self, index: usize) -> u64 {
+        self.segments
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.index == index)
+            .map(|s| s.len())
+            .unwrap_or(0)
     }
 
     fn snapshot_segments(&self) -> Vec<SegmentProgress> {
@@ -2127,6 +2143,10 @@ where
         if shared.paused.load(Ordering::Relaxed) {
             return StreamOutcome::Flag(WorkerExit::Paused);
         }
+        // 偷段保护：共享表中该段 end 可能已被收缩，超出部分已归新段——立即停止本段
+        if seg.downloaded >= shared.segment_len(seg.index) {
+            return StreamOutcome::Eof;
+        }
         match tokio::time::timeout(READ_TIMEOUT, stream.next()).await {
             Err(_) => return StreamOutcome::Retry(SparklingError::Network("读取超时".into())),
             Ok(None) => return StreamOutcome::Eof,
@@ -2251,14 +2271,15 @@ fn spec(url: String, dir: &tempfile::TempDir, max_speed: Option<u64>) -> TaskSpe
 
 #[tokio::test]
 async fn multithread_download_completes() {
-    let server = start(ServerConfig { size: 2 * 1024 * 1024, ..Default::default() }).await;
+    // 1 MiB / 8 段 = 128KB < 偷段阈值 256KB → 不发生偷段，段数断言稳定
+    let server = start(ServerConfig { size: 1024 * 1024, ..Default::default() }).await;
     let dir = tempfile::tempdir().unwrap();
     let engine = HttpEngine::new(None);
     let handle = engine.submit(spec(server.url.clone(), &dir, None)).await.unwrap();
     let mut rx = handle.subscribe();
     let snap = wait_state(&mut rx, TaskState::Completed, Duration::from_secs(30)).await;
-    assert_eq!(snap.downloaded, 2 * 1024 * 1024);
-    assert_eq!(snap.segments.len(), 8); // 未发生偷段时保持 8 段
+    assert_eq!(snap.downloaded, 1024 * 1024);
+    assert_eq!(snap.segments.len(), 8); // 低于偷段阈值，段数恒为 8
     let file = std::fs::read(dir.path().join("file.bin")).unwrap();
     assert_eq!(sha256_hex(&file), sha256_hex(&server.data));
     assert!(!dir.path().join("file.bin.sparkling.part").exists());
@@ -2429,7 +2450,8 @@ async fn segment_worker(
     let mut seg = start_seg;
     let mut attempt: u32 = 0;
     loop {
-        if seg.remaining() == 0 {
+        // 用共享表判断剩余（偷段会收缩本段 end，本地副本可能过期）
+        if shared.segment(seg.index).remaining() == 0 {
             return Ok(WorkerExit::Done);
         }
         let resp = match fetch_range(&client, &spec.url, seg.next_offset(), Some(seg.end)).await {
@@ -2447,7 +2469,8 @@ async fn segment_worker(
         attempt = 0;
         match write_stream(resp.bytes_stream(), &shared, &mut seg, &part_path, &global, &task).await {
             StreamOutcome::Eof => {
-                if seg.remaining() == 0 {
+                // 用共享表的最新 end 判断（可能已被偷段收缩，本地副本过期）
+                if shared.segment(seg.index).remaining() == 0 {
                     return Ok(WorkerExit::Done);
                 }
                 // 提前 EOF：当作可重试错误
@@ -2566,6 +2589,8 @@ const STEAL_THRESHOLD: u64 = 256 * 1024;
 ```rust
     /// 偷段：把剩余最大段的右半切出来给空闲 worker。
     /// 剩余不足阈值（256KiB）时返回 None —— 收尾阶段不值得再切。
+    /// 注意：stolen 段必须 push 进共享表 —— 派生总进度、快照、控制文件持久化
+    /// 都以共享表为准，漏 push 会让该段的字节从计数里"消失"。
     fn steal_largest(&self) -> Option<Segment> {
         let mut g = self.segments.lock().unwrap();
         let victim = g.iter_mut().max_by_key(|s| s.remaining())?;
@@ -2573,19 +2598,19 @@ const STEAL_THRESHOLD: u64 = 256 * 1024;
             return None;
         }
         let new_index = self.next_index.fetch_add(1, Ordering::Relaxed);
-        crate::segment::take_over(victim, new_index)
+        let stolen = crate::segment::take_over(victim, new_index)?;
+        g.push(stolen.clone());
+        Some(stolen)
     }
 ```
 
-(c) `segment_worker` 中两处 `return Ok(WorkerExit::Done)`（`seg.remaining() == 0` 与 `Eof` 后）都改为调用偷段循环；用一个辅助块替换（函数体结构调整如下——`loop { ... }` 外层不变，完成点统一走 `finish_or_steal`）：
+(c) `segment_worker` 中两处 `if shared.segment(seg.index).remaining() == 0 { return Ok(WorkerExit::Done); }`（loop 顶部与 `Eof` 分支后）都改为调用偷段循环：
 
 ```rust
-// segment_worker 内：原来的
-//     if seg.remaining() == 0 { return Ok(WorkerExit::Done); }
-// 与 Eof 分支的
-//     if seg.remaining() == 0 { return Ok(WorkerExit::Done); }
+// segment_worker 内：两处完成点
+//     if shared.segment(seg.index).remaining() == 0 { return Ok(WorkerExit::Done); }
 // 都替换为：
-        if seg.remaining() == 0 {
+        if shared.segment(seg.index).remaining() == 0 {
             match shared.steal_largest() {
                 Some(stolen) => {
                     seg = stolen;
@@ -2840,12 +2865,12 @@ fn validator_matches(recorded: &Option<String>, current: &Option<String>) -> boo
 }
 ```
 
-(c) `run_download` 的 else（多线程）分支整体替换（顺序分支的修改见 (e)）：
+(c) `run_download` 的 else（多线程）分支整体替换（顺序分支的修改见 (e)）。替换前先做两处小改动：`DownloadEnd` 枚举（Task 8 定义处）增加变体 `RestartNeeded`；`supervise` 的 match 增加臂 `Err(DownloadEnd::RestartNeeded) => unreachable!("RestartNeeded 由 run_download 内部消化"),`。
 
 ```rust
     } else {
-        // 恢复或全新
-        let shared: Arc<Shared> = if control_file::exists(&ctl_path) {
+        // 恢复或全新（首次构造；RestartNeeded 时会重建）
+        let mut shared: Arc<Shared> = if control_file::exists(&ctl_path) {
             match control_file::load(&ctl_path) {
                 Ok(cf)
                     if cf.url == spec.url
@@ -2881,30 +2906,51 @@ fn validator_matches(recorded: &Option<String>, current: &Option<String>) -> boo
                     .map_err(|e| DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string())))?;
             }
         }
-        let reporter = spawn_reporter(shared.clone(), progress_tx.clone(), Some(final_path.clone()));
-        let result = drive_download(
-            client.clone(),
-            spec.clone(),
-            shared.clone(),
-            part_path.clone(),
-            final_path.clone(),
-            global.clone(),
-            task_throttle.clone(),
-            retry.clone(),
-            progress_tx.clone(),
-            control_rx,
-        )
-        .await;
-        shared.finished.store(true, Ordering::Relaxed);
-        let _ = reporter.await;
-        match result {
-            Ok(()) => finalize(&shared, &final_path, &part_path, &ctl_path).map_err(DownloadEnd::Failed),
-            Err(DownloadEnd::Cancelled) => {
-                let _ = std::fs::remove_file(&part_path);
-                let _ = std::fs::remove_file(&ctl_path);
-                Err(DownloadEnd::Cancelled)
+        let mut reporter = spawn_reporter(shared.clone(), progress_tx.clone(), Some(final_path.clone()));
+        loop {
+            let result = drive_download(
+                client.clone(),
+                spec.clone(),
+                shared.clone(),
+                part_path.clone(),
+                final_path.clone(),
+                global.clone(),
+                task_throttle.clone(),
+                retry.clone(),
+                progress_tx.clone(),
+                &mut control_rx,
+            )
+            .await;
+            shared.finished.store(true, Ordering::Relaxed);
+            let _ = reporter.await;
+            match result {
+                Err(DownloadEnd::RestartNeeded) => {
+                    // 暂停期间远端已变化：清零重下（数据正确性红线）
+                    let _ = std::fs::remove_file(&ctl_path);
+                    let _ = std::fs::remove_file(&part_path);
+                    let probe2 = probe::probe(client, &spec.url)
+                        .await
+                        .map_err(DownloadEnd::Failed)?;
+                    crate::disk::check_space(&spec.save_dir, crate::disk::required_space(probe2.total))
+                        .map_err(DownloadEnd::Failed)?;
+                    shared = fresh_shared(spec, filename.clone(), probe2);
+                    std::fs::File::create(&part_path)
+                        .and_then(|f| f.set_len(shared.probe.total))
+                        .map_err(|e| DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string())))?;
+                    reporter = spawn_reporter(shared.clone(), progress_tx.clone(), Some(final_path.clone()));
+                    continue;
+                }
+                Ok(()) => {
+                    finalize(&shared, &final_path, &part_path, &ctl_path).map_err(DownloadEnd::Failed)?;
+                    return Ok(());
+                }
+                Err(DownloadEnd::Cancelled) => {
+                    let _ = std::fs::remove_file(&part_path);
+                    let _ = std::fs::remove_file(&ctl_path);
+                    return Err(DownloadEnd::Cancelled);
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) => Err(e),
         }
     }
 ```
@@ -2930,7 +2976,7 @@ async fn drive_download(
     task: Option<Arc<TokenBucket>>,
     retry: RetryPolicy,
     progress_tx: watch::Sender<ProgressSnapshot>,
-    mut control_rx: UnboundedReceiver<ControlMsg>,
+    control_rx: &mut UnboundedReceiver<ControlMsg>,
 ) -> std::result::Result<(), DownloadEnd> {
     let initial_workers = (spec.segments.max(1) as usize).max(1);
     'batches: loop {
@@ -2969,8 +3015,23 @@ async fn drive_download(
                             loop {
                                 match control_rx.recv().await {
                                     Some(ControlMsg::Resume) => {
-                                        shared.paused.store(false, Ordering::Relaxed);
-                                        continue 'batches; // 重新组批续传
+                                        // 数据正确性红线：恢复前重新探测，
+                                        // 远端已变化 → RestartNeeded → 整任务从零重下
+                                        let p = probe::probe(&client, &spec.url)
+                                            .await
+                                            .map_err(DownloadEnd::Failed)?;
+                                        let unchanged = p.total == shared.probe.total
+                                            && validator_matches(&shared.probe.etag, &p.etag)
+                                            && validator_matches(
+                                                &shared.probe.last_modified,
+                                                &p.last_modified,
+                                            );
+                                        if unchanged {
+                                            shared.paused.store(false, Ordering::Relaxed);
+                                            continue 'batches; // 重新组批续传
+                                        } else {
+                                            return Err(DownloadEnd::RestartNeeded);
+                                        }
                                     }
                                     Some(ControlMsg::Cancel) | None => {
                                         shared.cancelled.store(true, Ordering::Relaxed);
@@ -3005,9 +3066,11 @@ async fn drive_download(
         let segments = vec![Segment { index: 0, start: 0, end: probe.total - 1, downloaded: 0 }];
         let shared = Shared::new(spec.url.clone(), filename.clone(), probe, segments);
         let reporter = spawn_reporter(shared.clone(), progress_tx.clone(), None);
+        // sequential_worker 参数保持引用形态（Task 8 签名）；fut 借用局部变量，
+        // select! 挂在 &mut fut 上，不需要 'static
         let mut fut = Box::pin(sequential_worker(
-            client.clone(), spec.clone(), shared.clone(), part_path.clone(),
-            global.clone(), task_throttle.clone(), retry.clone(),
+            client, spec, &shared, &part_path,
+            global, &task_throttle, retry,
         ));
         let exit = tokio::select! {
             res = &mut fut => res,
@@ -3313,6 +3376,7 @@ pub async fn probe(client: &reqwest::Client, url: &str) -> Result<ProbeResult> {
     // Content-MD5（若服务器提供）：不匹配则不产出正式文件
     if let Some(expected) = &shared.probe.content_md5 {
         use md5::{Digest, Md5};
+        use base64::Engine as _;
         let mut h = Md5::new();
         let mut f = std::fs::File::open(part_path)
             .map_err(|e| SparklingError::DiskWrite(e.to_string()))?;
@@ -3998,6 +4062,7 @@ pub struct AddTaskOptions {
     pub max_speed: Option<u64>,
 }
 
+#[derive(Clone)]
 struct Inner {
     engine: Arc<dyn Engine>,
     store: Arc<Mutex<TaskStore>>,
