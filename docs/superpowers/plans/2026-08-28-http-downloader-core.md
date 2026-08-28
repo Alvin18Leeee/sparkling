@@ -4415,19 +4415,18 @@ impl TaskManager {
         if self.inner.handles.lock().unwrap().contains_key(id) {
             return Ok(()); // 运行/暂停中：由 pause/resume 管理
         }
+        // 终态守卫（先检查后入队，零窗口）：完成/取消的任务不可重试（状态机红线）
+        if let Some(rec) = self.inner.store.lock().unwrap().get(id).ok().flatten() {
+            if matches!(rec.state, TaskState::Completed | TaskState::Cancelled) {
+                return Ok(());
+            }
+        }
         let mut q = self.inner.queue.lock().unwrap();
         if q.iter().any(|x| x == id) {
             return Ok(()); // 已在队列
         }
         q.push_back(id.to_string());
         drop(q);
-        // 终态守卫：完成/取消的任务不可重试（状态机红线）
-        if let Some(rec) = self.inner.store.lock().unwrap().get(id).ok().flatten() {
-            if matches!(rec.state, TaskState::Completed | TaskState::Cancelled) {
-                self.inner.queue.lock().unwrap().retain(|x| x != id);
-                return Ok(());
-            }
-        }
         self.inner.store.lock().unwrap().update_state(id, TaskState::Queued, None)?;
         self.emit_state(id, TaskState::Queued, None);
         try_schedule(&self.inner);
