@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 分片默认 8，可配 1–64；并发任务数默认 3（可配）；进度事件节流 250ms；控制文件每 2 秒或有分片完成时落盘。
+- 分片默认 8，可配 1–64；并发任务数默认 3（可配）；进度事件节流 250ms；控制文件每 250ms（reporter 节拍，D28）或有分片完成时落盘。
 - 分片重试：指数退避 1s/2s/4s…上限 30s，5 次后该分片失败（测试可用快速策略）。
 - 磁盘空间检查：文件大小 × 1.02。
 - 数据正确性红线：ETag/Last-Modified 不一致 → 整任务从零重下；Content-MD5 不匹配 → Failed 且不产出正式文件。
@@ -2490,23 +2490,25 @@ impl Shared {
 }
 ```
 
-(b) `spawn_reporter` 签名改为 `fn spawn_reporter(shared: Arc<Shared>, progress_tx: watch::Sender<ProgressSnapshot>, ctl: Option<PathBuf>) -> JoinHandle<()>`，循环内加 `tick` 计数，`interval.tick()` 之后：
+(b) `spawn_reporter` 签名改为 `fn spawn_reporter(shared: Arc<Shared>, progress_tx: watch::Sender<ProgressSnapshot>, ctl: Option<PathBuf>) -> JoinHandle<()>`，`interval.tick()` 之后：
 
 ```rust
-let mut tick: u32 = 0;
 loop {
     interval.tick().await;
     if shared.finished.load(Ordering::Relaxed) {
         break;
     }
+    // 暂停期间静默（D29）：周期帧硬编码 state=Running，会把 Paused 帧盖掉，
+    // 冻结断言与 manager 状态计数都会抖动
+    if shared.paused.load(Ordering::Relaxed) {
+        continue;
+    }
     // ...（原快照/测速/发送逻辑不变）...
     let _ = progress_tx.send(ProgressSnapshot { /* 原样 */ });
-    tick += 1;
-    if tick % 8 == 0 {
-        // 每 2 秒保存控制文件
-        if let Some(final_path) = &ctl {
-            let _ = control_file::save(final_path, &shared.build_control_file());
-        }
+    // 每个节拍（250ms）都落盘控制文件（D28：spec 原 2 秒节拍在 8 并发均分限速时
+    // 分片完成保存首次触发要 ~7s，崩溃窗口过大；250ms 把窗口收到一拍以内）
+    if let Some(final_path) = &ctl {
+        let _ = control_file::save(final_path, &shared.build_control_file());
     }
 }
 ```
@@ -3014,7 +3016,7 @@ fn validator_matches(recorded: &Option<String>, current: &Option<String>) -> boo
 }
 ```
 
-(c) `run_download` 的 else（多线程）分支整体替换（顺序分支的修改见 (e)）。替换前先做两处小改动：`DownloadEnd` 枚举（Task 8 定义处）增加变体 `RestartNeeded`；`supervise` 的 match 增加臂 `Err(DownloadEnd::RestartNeeded) => unreachable!("RestartNeeded 由 run_download 内部消化"),`。
+(c) `run_download` 的 else（多线程）分支整体替换（顺序分支的修改见 (e)）。替换前先做两处小改动：`DownloadEnd` 枚举（Task 8 定义处）增加变体 `RestartNeeded`；`supervise` 的 match 增加臂 `Err(DownloadEnd::RestartNeeded) => unreachable!("RestartNeeded 由 run_download 内部消化"),`。恢复判定改为元组形式：`let (mut shared, resuming): (Arc<Shared>, bool) = if ... { 恢复分支 → (shared, true) } else { (fresh_shared(...), false) }`（内部 match 的 Ok-if 分支返回恢复值，其余走 fresh）。
 
 ```rust
     } else {
@@ -3044,16 +3046,23 @@ fn validator_matches(recorded: &Option<String>, current: &Option<String>) -> boo
         } else {
             fresh_shared(spec, filename, probe)
         };
-        // 恢复场景下 .part 可能缺失/被截：确保存在且大小正确
-        {
-            let ok = std::fs::metadata(&part_path)
-                .map(|m| m.len() == probe.total)
-                .unwrap_or(false);
-            if !ok {
-                std::fs::File::create(&part_path)
-                    .and_then(|f| f.set_len(probe.total))
-                    .map_err(|e| DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string())))?;
+        // D30（红线）：续传要求 .part 实际支撑控制文件——缺失或大小不符时
+        // 重建空 .part 会留"零洞"（ctl 声称已下载的区域是 0 字节，finalize
+        // 大小校验通过但内容损坏），必须整体从零重下。
+        // 注：probe 已移入 Shared，用 shared.probe 取总大小；恢复判定用元组带出
+        // resuming 标志（恢复分支返回 (shared, true)，其余 (fresh_shared(...), false)）。
+        let part_ok = std::fs::metadata(&part_path)
+            .map(|m| m.len() == shared.probe.total)
+            .unwrap_or(false);
+        if !part_ok {
+            if resuming {
+                let _ = std::fs::remove_file(&ctl_path);
+                shared = fresh_shared(spec, filename.clone(), shared.probe.clone());
             }
+            let _ = std::fs::remove_file(&part_path);
+            std::fs::File::create(&part_path)
+                .and_then(|f| f.set_len(shared.probe.total))
+                .map_err(|e| DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string())))?;
         }
         let mut reporter = spawn_reporter(shared.clone(), progress_tx.clone(), Some(final_path.clone()));
         loop {
