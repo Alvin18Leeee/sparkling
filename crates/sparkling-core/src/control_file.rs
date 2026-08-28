@@ -36,11 +36,7 @@ pub fn save(final_path: &Path, cf: &ControlFile) -> Result<()> {
         .map_err(|e| SparklingError::DiskWrite(format!("控制文件序列化失败: {e}")))?;
     std::fs::write(&tmp, &data)
         .map_err(|e| SparklingError::DiskWrite(format!("控制文件写入失败: {e}")))?;
-    // Windows 上 rename 不覆盖已存在目标，先删
-    if ctl.exists() {
-        std::fs::remove_file(&ctl)
-            .map_err(|e| SparklingError::DiskWrite(format!("旧控制文件删除失败: {e}")))?;
-    }
+    // std::fs::rename 在 Windows 上是 MoveFileExW + REPLACE_EXISTING，直接覆盖
     std::fs::rename(&tmp, &ctl)
         .map_err(|e| SparklingError::DiskWrite(format!("控制文件落盘失败: {e}")))?;
     Ok(())
@@ -54,10 +50,13 @@ pub fn load(ctl_path: &Path) -> Result<ControlFile> {
     let cf: ControlFile = serde_json::from_slice(&raw)
         .map_err(|e| SparklingError::CorruptControlFile(format!("JSON 解析失败: {e}")))?;
     for seg in &cf.segments {
-        if seg.downloaded > seg.len() || seg.end < seg.start {
+        // 注意顺序：end < start 先判（短路），否则 len() 的 u64 减法在 debug 构建下溢 panic
+        if seg.end < seg.start || seg.downloaded > seg.len() {
+            // 倒置区间下 len() 会下溢：诊断消息用饱和计算，避免诊断路径自身 panic
+            let len = seg.end.saturating_sub(seg.start) + 1;
             return Err(SparklingError::CorruptControlFile(format!(
                 "分片 {} 不变量破坏: downloaded={} len={}",
-                seg.index, seg.downloaded, seg.len()
+                seg.index, seg.downloaded, len
             )));
         }
     }

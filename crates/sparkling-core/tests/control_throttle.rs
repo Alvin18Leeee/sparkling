@@ -1,5 +1,5 @@
 use sparkling_core::control_file::{self, ControlFile};
-use sparkling_core::segment::split;
+use sparkling_core::segment::{split, Segment};
 
 fn sample() -> ControlFile {
     ControlFile {
@@ -63,6 +63,18 @@ fn atomic_save_leaves_no_tmp() {
     assert_eq!(files.len(), 1); // 只有 .sparkling，没有残留 tmp
 }
 
+#[test]
+fn inverted_segment_is_corrupt_not_panic() {
+    // 倒置区间（end < start）必须返回 CorruptControlFile，而不是 debug 构建下溢 panic
+    let dir = tempfile::tempdir().unwrap();
+    let final_path = dir.path().join("a.bin");
+    let mut cf = sample();
+    cf.segments[0] = Segment { index: 0, start: 10, end: 5, downloaded: 0 };
+    control_file::save(&final_path, &cf).unwrap();
+    let err = control_file::load(&control_file::path_for(&final_path)).unwrap_err();
+    assert!(matches!(err, sparkling_core::SparklingError::CorruptControlFile(_)));
+}
+
 mod throttle_tests {
     use sparkling_core::throttle::TokenBucket;
 
@@ -78,11 +90,22 @@ mod throttle_tests {
 
     #[tokio::test(start_paused = true)]
     async fn rate_limited_paces_output() {
-        let bucket = TokenBucket::new(Some(1000)); // 1000 B/s
-        bucket.acquire(1000).await; // 初始令牌覆盖（桶容量 = 1 秒配额，取尽后桶空）
+        let bucket = TokenBucket::new(Some(1000)); // 1000 B/s，初始满桶 1000
+        bucket.acquire(1000).await; // 排空初始令牌
         let t0 = tokio::time::Instant::now();
         bucket.acquire(500).await; // 需要等 0.5s 攒令牌
         assert!(t0.elapsed() >= std::time::Duration::from_millis(500));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn oversize_acquire_terminates_and_paces() {
+        // 限速低于单块大小（64 KiB）的场景：acquire 决不能挂死
+        let bucket = TokenBucket::new(Some(60_000)); // 60 KB/s
+        bucket.acquire(64 * 1024).await; // 初始满桶 60000 < 65536，须按差额等待
+        let t0 = tokio::time::Instant::now();
+        bucket.acquire(64 * 1024).await;
+        // 第二块按速率线性等待：65536/60000 ≈ 1.09s
+        assert!(t0.elapsed() >= std::time::Duration::from_millis(1000));
     }
 
     #[tokio::test(start_paused = true)]

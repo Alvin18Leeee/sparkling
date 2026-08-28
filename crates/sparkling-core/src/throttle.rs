@@ -32,25 +32,26 @@ impl TokenBucket {
     }
 
     /// 等待取得 `amount` 个令牌（字节数）。不限速时立即返回。
+    /// 支持 amount > rate（桶容量 = 1 秒配额）：按速率线性等待差额，等待期产生的
+    /// 令牌直接折算进等待时长，睡醒清零完成扣减——低速限速下大块请求不会挂死。
     pub async fn acquire(&self, amount: u64) {
-        loop {
-            let sleep_for = {
-                let mut g = self.inner.lock().unwrap();
-                let now = Instant::now();
-                let elapsed = now.duration_since(g.last).as_secs_f64();
-                g.last = now;
-                if g.rate == 0 {
-                    return; // 不限速
-                }
-                g.tokens = (g.tokens + elapsed * g.rate as f64).min(g.rate as f64);
-                if g.tokens >= amount as f64 {
-                    g.tokens -= amount as f64;
-                    return;
-                }
-                // 需要等待的时长（秒）
-                ((amount as f64 - g.tokens) / g.rate as f64).max(0.001)
-            };
-            tokio::time::sleep(std::time::Duration::from_secs_f64(sleep_for)).await;
-        }
+        let sleep_for = {
+            let mut g = self.inner.lock().unwrap();
+            let now = Instant::now();
+            let elapsed = now.duration_since(g.last).as_secs_f64();
+            g.last = now;
+            if g.rate == 0 {
+                return; // 不限速
+            }
+            g.tokens = (g.tokens + elapsed * g.rate as f64).min(g.rate as f64);
+            if g.tokens >= amount as f64 {
+                g.tokens -= amount as f64;
+                return;
+            }
+            ((amount as f64 - g.tokens) / g.rate as f64).max(0.001)
+        };
+        tokio::time::sleep(std::time::Duration::from_secs_f64(sleep_for)).await;
+        // 等待期间的令牌额度已折算进等待时长：清零即完成本次扣减
+        self.inner.lock().unwrap().tokens = 0.0;
     }
 }
