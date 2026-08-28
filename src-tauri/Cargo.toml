@@ -1,0 +1,21 @@
+[package]
+name = "sparkling"
+version = "0.1.0"
+edition = "2021"
+description = "Sparkling 下载器"
+
+[lib]
+name = "sparkling_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 事件转发循环中按 variant 匹配 tokio broadcast 的 RecvError（Lagged/Closed），
+# 需要作为直接依赖才能引用该类型；sparkling-core 已启用 full，无额外编译成本
+tokio = { version = "1", features = ["sync"] }
+sparkling-core = { path = "../crates/sparkling-core" }

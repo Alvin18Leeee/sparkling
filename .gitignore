@@ -6,3 +6,5 @@ dist/*
 *.sparkling.part
 tasks.db
 settings.json
+# tauri-build 每次构建生成的 ACL/schema 产物
+src-tauri/gen/
