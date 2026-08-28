@@ -1217,6 +1217,12 @@ async fn handler(State(st): State<Arc<ServerState>>, req_headers: HeaderMap) -> 
         );
         StatusCode::PARTIAL_CONTENT
     } else {
+        // 200 路径显式 Content-Length：Body::from_stream 长度未知时 hyper 会改用
+        // chunked 编码丢掉该头，而 probe 的 200 路径依赖它取 total
+        resp_headers.insert(
+            header::CONTENT_LENGTH,
+            HeaderValue::from_str(&cfg.size.to_string()).unwrap(),
+        );
         StatusCode::OK
     };
     resp_headers.insert(
@@ -1386,13 +1392,15 @@ async fn probe_no_range_server() {
 
 #[tokio::test]
 async fn probe_disposition_overrides_filename() {
+    // 用 ASCII 文件名：HeaderValue::from_str 接受 obs-text，但 to_str() 读回时
+    // 拒绝非 ASCII——中文头无法往返，引擎侧 filename* 解码分支覆盖 UTF-8 场景
     let server = start(ServerConfig {
         size: 100,
-        disposition: Some("报表.zip".into()),
+        disposition: Some("report-q4.zip".into()),
         ..Default::default()
     }).await;
     let p = probe(&client(), &server.url).await.unwrap();
-    assert_eq!(p.filename, "报表.zip");
+    assert_eq!(p.filename, "report-q4.zip");
 }
 
 #[tokio::test]
