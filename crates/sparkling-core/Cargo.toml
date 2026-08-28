@@ -1,0 +1,27 @@
+[package]
+name = "sparkling-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = true, features = ["stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+md-5 = "0.10"
+base64 = "0.22"
+async-trait = "0.1"
+fs2 = "0.4"
+percent-encoding = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+# start_paused 测试需要 test-util（不在 full 里）
+tokio = { version = "1", features = ["test-util"] }
+axum = "0.7"
+tempfile = "3"
+sha2 = "0.10"
+futures = "0.3"
