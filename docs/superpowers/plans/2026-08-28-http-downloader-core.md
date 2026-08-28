@@ -813,6 +813,37 @@ mod throttle_tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn sustained_pacing_not_double_credit() {
+        // 持续限速不得双倍计费：10 × 500B @ 1000B/s 应耗时 ~5s（双计费只花 2.5s）
+        let bucket = TokenBucket::new(Some(1000));
+        bucket.acquire(1000).await; // 排空初始配额
+        let t0 = tokio::time::Instant::now();
+        for _ in 0..10 {
+            bucket.acquire(500).await;
+        }
+        assert!(t0.elapsed() >= std::time::Duration::from_secs(5));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(7)); // 上界兼防挂死回归
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_acquires_do_not_overadmit() {
+        // 并发请求不得共享同一段额度：4 × 500B @ 1000B/s 应耗时 ~2s（过度放行会显著更短）
+        use std::sync::Arc;
+        let bucket = Arc::new(TokenBucket::new(Some(1000)));
+        bucket.acquire(1000).await; // 排空初始配额
+        let t0 = tokio::time::Instant::now();
+        let mut joins = Vec::new();
+        for _ in 0..4 {
+            let b = bucket.clone();
+            joins.push(tokio::spawn(async move { b.acquire(500).await }));
+        }
+        for j in joins {
+            j.await.unwrap();
+        }
+        assert!(t0.elapsed() >= std::time::Duration::from_secs(2));
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn set_rate_takes_effect_immediately() {
         let bucket = TokenBucket::new(Some(10));
         bucket.set_rate(None);
@@ -869,8 +900,11 @@ impl TokenBucket {
     }
 
     /// 等待取得 `amount` 个令牌（字节数）。不限速时立即返回。
-    /// 支持 amount > rate（桶容量 = 1 秒配额）：按速率线性等待差额，等待期产生的
-    /// 令牌直接折算进等待时长，睡醒清零完成扣减——低速限速下大块请求不会挂死。
+    /// 负债记账：余额可为负（本次请求的欠账），等待 欠账/速率。
+    /// - 支持 amount > rate（桶容量 = 1 秒配额），低速限速下大块请求不挂死；
+    /// - 并发 acquire 在锁内串行扣减、各等各的欠账，聚合速率不超标
+    ///   （快照式等待会让并发请求重复消费同一段额度，导致过度放行）；
+    /// - 正余额封顶 1 秒配额防囤积（负债不封顶）。
     pub async fn acquire(&self, amount: u64) {
         let sleep_for = {
             let mut g = self.inner.lock().unwrap();
@@ -880,16 +914,19 @@ impl TokenBucket {
             if g.rate == 0 {
                 return; // 不限速
             }
-            g.tokens = (g.tokens + elapsed * g.rate as f64).min(g.rate as f64);
-            if g.tokens >= amount as f64 {
-                g.tokens -= amount as f64;
-                return;
+            g.tokens += elapsed * g.rate as f64;
+            if g.tokens > g.rate as f64 {
+                g.tokens = g.rate as f64; // 正余额封顶（允许小幅突发）
             }
-            ((amount as f64 - g.tokens) / g.rate as f64).max(0.001)
+            g.tokens -= amount as f64;
+            if g.tokens >= 0.0 {
+                return; // 余额足够，已扣减
+            }
+            (-g.tokens) / g.rate as f64
         };
-        tokio::time::sleep(std::time::Duration::from_secs_f64(sleep_for)).await;
-        // 等待期间的令牌额度已折算进等待时长：清零即完成本次扣减
-        self.inner.lock().unwrap().tokens = 0.0;
+        if sleep_for > 0.0 {
+            tokio::time::sleep(std::time::Duration::from_secs_f64(sleep_for)).await;
+        }
     }
 }
 ```
