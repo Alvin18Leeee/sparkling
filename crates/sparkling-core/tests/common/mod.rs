@@ -300,3 +300,26 @@ pub async fn wait_state(
         }
     }
 }
+
+/// 轮询 watch 通道直到谓词满足或超时（不限状态的进度等待）
+pub async fn wait_until(
+    rx: &mut watch::Receiver<ProgressSnapshot>,
+    pred: impl Fn(&ProgressSnapshot) -> bool,
+    timeout: std::time::Duration,
+) -> ProgressSnapshot {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        {
+            let cur = rx.borrow().clone();
+            if pred(&cur) {
+                return cur;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("wait_until 超时");
+        }
+        if tokio::time::timeout_at(deadline, rx.changed()).await.is_err() {
+            panic!("wait_until 超时（通道关闭）");
+        }
+    }
+}

@@ -1,7 +1,8 @@
 use thiserror::Error;
 
 /// 统一错误类型：user_message() 给用户看（中文），technical() 给详情面板看。
-#[derive(Debug, Error)]
+/// Clone：worker 失败上报（shared.fail）与返回值各需一份。
+#[derive(Debug, Clone, Error)]
 pub enum SparklingError {
     #[error("网络错误: {0}")]
     Network(String),

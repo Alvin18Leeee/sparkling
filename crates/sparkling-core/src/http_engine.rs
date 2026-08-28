@@ -63,9 +63,7 @@ enum DownloadEnd {
 
 /// 所有 worker 共享的任务态
 struct Shared {
-    #[allow(dead_code)] // Task 11 控制文件保存使用
     url: String,
-    #[allow(dead_code)] // Task 11 控制文件保存使用
     filename: String,
     probe: ProbeResult,
     segments: Mutex<Vec<Segment>>,
@@ -132,7 +130,19 @@ impl Shared {
             .collect()
     }
 
-    #[allow(dead_code)] // Task 9 worker 失败上报使用
+    /// 由当前状态构造控制文件内容
+    fn build_control_file(&self) -> control_file::ControlFile {
+        control_file::ControlFile {
+            url: self.url.clone(),
+            etag: self.probe.etag.clone(),
+            last_modified: self.probe.last_modified.clone(),
+            total_size: self.probe.total,
+            supports_range: self.probe.supports_range,
+            filename: self.filename.clone(),
+            segments: self.segments.lock().unwrap().clone(),
+        }
+    }
+
     fn fail(&self, e: SparklingError) {
         tracing::error!("任务失败: {}", e.technical());
         *self.failed.lock().unwrap() = Some(e);
@@ -274,7 +284,7 @@ async fn run_download(
     if !probe.supports_range {
         let segments = vec![Segment { index: 0, start: 0, end: probe.total - 1, downloaded: 0 }];
         let shared = Shared::new(spec.url.clone(), filename.clone(), probe, segments);
-        let reporter = spawn_reporter(shared.clone(), progress_tx.clone());
+        let reporter = spawn_reporter(shared.clone(), progress_tx.clone(), None);
         let exit = sequential_worker(client, spec, &shared, &part_path, global, &task_throttle, retry).await;
         shared.finished.store(true, Ordering::Relaxed);
         let _ = reporter.await;
@@ -287,8 +297,50 @@ async fn run_download(
             Err(e) => Err(DownloadEnd::Failed(e)),
         }
     } else {
-        // 多线程分片路径在 Task 9 实现
-        Err(DownloadEnd::Failed(SparklingError::Other("多线程分片下载在 Task 9 实现".into())))
+        let segments = crate::segment::split(probe.total, spec.segments);
+        let shared = Shared::new(spec.url.clone(), filename.clone(), probe, segments);
+        let reporter = spawn_reporter(shared.clone(), progress_tx.clone(), Some(final_path.clone()));
+        let n = shared.segments.lock().unwrap().len();
+        let mut workers = Vec::with_capacity(n);
+        for i in 0..n {
+            let seg = shared.segment(i);
+            workers.push(tokio::spawn(segment_worker(
+                client.clone(),
+                spec.clone(),
+                shared.clone(),
+                seg,
+                part_path.clone(),
+                global.clone(),
+                task_throttle.clone(),
+                retry.clone(),
+            )));
+        }
+        let mut failure: Option<SparklingError> = None;
+        let mut cancelled = false;
+        for w in workers {
+            match w.await {
+                Ok(Ok(WorkerExit::Done)) => {}
+                Ok(Ok(_)) | Err(_) => cancelled = true, // Paused/Cancelled/Failed/abort
+                Ok(Err(e)) => {
+                    if failure.is_none() {
+                        failure = Some(e);
+                    }
+                }
+            }
+        }
+        shared.finished.store(true, Ordering::Relaxed);
+        let _ = reporter.await;
+        if let Some(e) = failure {
+            // 保留控制文件与 .part：手动重试从分片断点继续（spec）
+            return Err(DownloadEnd::Failed(e));
+        }
+        if cancelled {
+            let _ = std::fs::remove_file(&part_path);
+            let _ = std::fs::remove_file(&ctl_path);
+            return Err(DownloadEnd::Cancelled);
+        }
+        finalize(&shared, &final_path, &part_path, &ctl_path).map_err(DownloadEnd::Failed)?;
+        Ok(())
     }
 }
 
@@ -302,14 +354,18 @@ fn part_path_for(final_path: &Path) -> PathBuf {
 /// 终局保证：finished 置位后发送**最后一帧最新快照**再退出——supervise 的终态
 /// 快照从 watch 借用的是最后一帧，缺这一帧则终态 downloaded 最多旧 250ms。
 /// 周期帧发送失败（接收端全部掉线，abort 场景）时退出，防止任务泄漏。
+/// ctl = Some(正式文件路径) 时每 2 秒（8 × 250ms）原子保存控制文件，
+/// 运行中的任务崩溃后可凭 `.sparkling` 控制文件续传（Task 11 接入）。
 fn spawn_reporter(
     shared: Arc<Shared>,
     progress_tx: watch::Sender<ProgressSnapshot>,
+    ctl: Option<PathBuf>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(250));
         let mut window: std::collections::VecDeque<(tokio::time::Instant, u64)> =
             std::collections::VecDeque::new();
+        let mut tick: u32 = 0;
         loop {
             interval.tick().await;
             if shared.finished.load(Ordering::Relaxed) {
@@ -350,6 +406,13 @@ fn spawn_reporter(
                 .is_err()
             {
                 break; // 接收端全部掉线（abort）：退出防泄漏
+            }
+            tick += 1;
+            if tick % 8 == 0 {
+                // 每 2 秒保存控制文件
+                if let Some(final_path) = &ctl {
+                    let _ = control_file::save(final_path, &shared.build_control_file());
+                }
             }
         }
     })
@@ -403,6 +466,86 @@ async fn sequential_worker(
                 tokio::time::sleep(retry.backoff(attempt)).await;
             }
             StreamOutcome::Fatal(e) => return Err(e),
+        }
+    }
+}
+
+/// 分片 worker：下载指派的段直至完成（偷段在 Task 10 加入尾部）
+#[allow(clippy::too_many_arguments)]
+async fn segment_worker(
+    client: reqwest::Client,
+    spec: TaskSpec,
+    shared: Arc<Shared>,
+    start_seg: Segment,
+    part_path: PathBuf,
+    global: Arc<TokenBucket>,
+    task: Option<Arc<TokenBucket>>,
+    retry: RetryPolicy,
+) -> std::result::Result<WorkerExit, SparklingError> {
+    let mut seg = start_seg;
+    let mut attempt: u32 = 0;
+    loop {
+        // 用共享表判断剩余（偷段会收缩本段 end，本地副本可能过期）
+        if shared.segment(seg.index).remaining() == 0 {
+            return Ok(WorkerExit::Done);
+        }
+        let resp = match fetch_range(&client, &spec.url, seg.next_offset(), Some(seg.end)).await {
+            // 206 守卫：带 Range 的请求若被中间层忽略返回 200 全量，
+            // 按段偏移写入会损坏 .part —— 视为可重试错误
+            Ok(r) if r.status().as_u16() == 206 => r,
+            Ok(_) => {
+                attempt += 1;
+                if attempt > retry.max_retries {
+                    let e = SparklingError::Network("服务器忽略 Range 请求".into());
+                    shared.fail(e.clone());
+                    return Err(e);
+                }
+                tokio::time::sleep(retry.backoff(attempt)).await;
+                continue;
+            }
+            Err(e) => {
+                attempt += 1;
+                if attempt > retry.max_retries {
+                    shared.fail(e.clone());
+                    return Err(e);
+                }
+                tokio::time::sleep(retry.backoff(attempt)).await;
+                continue;
+            }
+        };
+        attempt = 0;
+        match write_stream(resp.bytes_stream(), &shared, &mut seg, &part_path, &global, &task).await {
+            StreamOutcome::Eof => {
+                // 用共享表的最新 end 判断（可能已被偷段收缩，本地副本过期）
+                if shared.segment(seg.index).remaining() == 0 {
+                    return Ok(WorkerExit::Done);
+                }
+                // 提前 EOF：当作可重试错误
+                attempt += 1;
+                if attempt > retry.max_retries {
+                    let e = SparklingError::Network(format!(
+                        "分片 {} 提前结束，剩余 {} 字节",
+                        seg.index,
+                        seg.remaining()
+                    ));
+                    shared.fail(e.clone());
+                    return Err(e);
+                }
+                tokio::time::sleep(retry.backoff(attempt)).await;
+            }
+            StreamOutcome::Flag(exit) => return Ok(exit),
+            StreamOutcome::Retry(e) => {
+                attempt += 1;
+                if attempt > retry.max_retries {
+                    shared.fail(e.clone());
+                    return Err(e);
+                }
+                tokio::time::sleep(retry.backoff(attempt)).await;
+            }
+            StreamOutcome::Fatal(e) => {
+                shared.fail(e.clone());
+                return Err(e);
+            }
         }
     }
 }
