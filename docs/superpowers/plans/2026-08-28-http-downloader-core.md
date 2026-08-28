@@ -1456,6 +1456,9 @@ pub struct ProgressSnapshot {
     pub speed: u64, // bytes/s
     pub segments: Vec<SegmentProgress>,
     pub error: Option<String>,
+    /// 引擎解析出的文件名（D35：首帧起携带，manager 回填持久化——
+    /// 恢复时定位控制文件、UI 显示真实文件名都依赖它）
+    pub filename: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2017,6 +2020,7 @@ impl Engine for HttpEngine {
             speed: 0,
             segments: vec![],
             error: None,
+            filename: None, // probe 完成后首帧携带真实文件名（D35）
         });
         let (control_tx, control_rx) = mpsc::unbounded_channel();
         let join = tokio::spawn(supervise(
@@ -2157,6 +2161,7 @@ fn spawn_reporter(
                     speed: 0,
                     segments: shared.snapshot_segments(),
                     error: None,
+                    filename: Some(shared.filename.clone()),
                 });
                 break;
             }
@@ -2182,6 +2187,7 @@ fn spawn_reporter(
                     speed,
                     segments: shared.snapshot_segments(),
                     error: None,
+                    filename: Some(shared.filename.clone()),
                 })
                 .is_err()
             {
@@ -3822,6 +3828,14 @@ impl TaskStore {
             .map_err(|e| SparklingError::Other(format!("删除失败: {e}")))?;
         Ok(())
     }
+
+    /// 回填引擎解析出的文件名（D35：恢复定位控制文件、UI 显示依赖）
+    pub fn update_filename(&self, id: &str, filename: &str) -> Result<()> {
+        self.conn
+            .execute("UPDATE tasks SET filename = ?2 WHERE id = ?1", params![id, filename])
+            .map_err(|e| SparklingError::Other(format!("更新文件名失败: {e}")))?;
+        Ok(())
+    }
 }
 ```
 
@@ -4486,12 +4500,20 @@ async fn monitor_task(inner: Arc<Inner>, id: TaskId, handle: TaskHandle) {
     let _ = inner.events.send(TaskEvent::State { id: id.clone(), state: TaskState::Running, error: None });
     let mut rx = handle.subscribe();
     let mut prev = TaskState::Running;
+    let mut filename_persisted = false;
     loop {
         if rx.changed().await.is_err() {
             break;
         }
         let snap = rx.borrow().clone();
         inner.store.lock().unwrap().update_progress(&id, snap.downloaded, snap.total).ok();
+        // D35：回填引擎解析出的文件名（只写一次——恢复定位 ctl、UI 显示依赖）
+        if !filename_persisted {
+            if let Some(name) = &snap.filename {
+                inner.store.lock().unwrap().update_filename(&id, name).ok();
+                filename_persisted = true;
+            }
+        }
         let _ = inner.events.send(TaskEvent::Progress {
             id: id.clone(),
             downloaded: snap.downloaded,
