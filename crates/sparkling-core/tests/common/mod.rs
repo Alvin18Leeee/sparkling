@@ -126,6 +126,13 @@ async fn handler(State(st): State<Arc<ServerState>>, req_headers: HeaderMap) -> 
         );
         StatusCode::PARTIAL_CONTENT
     } else {
+        // 真实不支持 Range 的服务器会给出 Content-Length；Body::from_stream
+        // 长度未知，hyper 会改用 chunked 编码丢掉该头，probe 的 200 路径
+        // 取不到 total（Task 7 probe_no_range_server 依赖此头）
+        resp_headers.insert(
+            header::CONTENT_LENGTH,
+            HeaderValue::from_str(&cfg.size.to_string()).unwrap(),
+        );
         StatusCode::OK
     };
     resp_headers.insert(
@@ -261,5 +268,35 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), 200);
         assert_eq!(resp.bytes().await.unwrap().len(), 0);
+    }
+}
+
+use sparkling_core::engine::ProgressSnapshot;
+use sparkling_core::task::TaskState;
+use tokio::sync::watch;
+
+/// 轮询 watch 通道直到出现目标状态或超时（集成测试核心辅助）
+pub async fn wait_state(
+    rx: &mut watch::Receiver<ProgressSnapshot>,
+    want: TaskState,
+    timeout: std::time::Duration,
+) -> ProgressSnapshot {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        {
+            let cur = rx.borrow().clone();
+            if cur.state == want {
+                return cur;
+            }
+            if !cur.error.is_none() && want != TaskState::Failed {
+                panic!("任务提前失败: {}", cur.error.unwrap());
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("等待状态 {want:?} 超时");
+        }
+        if tokio::time::timeout_at(deadline, rx.changed()).await.is_err() {
+            panic!("等待状态 {want:?} 超时（通道关闭）");
+        }
     }
 }

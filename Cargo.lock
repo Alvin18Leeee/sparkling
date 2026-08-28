@@ -1234,6 +1234,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64",
+ "bytes",
  "fs2",
  "futures",
  "md-5",
