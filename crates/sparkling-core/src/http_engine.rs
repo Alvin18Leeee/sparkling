@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
@@ -61,6 +62,9 @@ enum WorkerExit {
 enum DownloadEnd {
     Failed(SparklingError),
     Cancelled,
+    /// 暂停期间远端已变化（总量/ETag/Last-Modified 校验不过）：
+    /// 由 run_download 内部消化（清零重下），不应外泄到 supervise
+    RestartNeeded,
 }
 
 /// 所有 worker 共享的任务态
@@ -253,6 +257,7 @@ async fn supervise(
             snap.state = TaskState::Failed;
             snap.error = Some(e.user_message());
         }
+        Err(DownloadEnd::RestartNeeded) => unreachable!("RestartNeeded 由 run_download 内部消化"),
     }
     let _ = progress_tx.send(snap);
     registry.lock().unwrap().remove(&id);
@@ -265,7 +270,7 @@ async fn run_download(
     global: &Arc<TokenBucket>,
     retry: &RetryPolicy,
     progress_tx: &watch::Sender<ProgressSnapshot>,
-    _control_rx: &mut mpsc::UnboundedReceiver<ControlMsg>, // Task 8 暂不消费，Task 11 接入暂停/恢复/取消
+    control_rx: &mut mpsc::UnboundedReceiver<ControlMsg>,
 ) -> std::result::Result<(), DownloadEnd> {
     // 1. 探测
     let probe = probe::probe(client, &spec.url).await.map_err(DownloadEnd::Failed)?;
@@ -285,81 +290,302 @@ async fn run_download(
         return Ok(());
     }
 
-    // 4. 旧任务残留清理（真正的续传在 Task 11 实现，当前先安全重下）
-    if control_file::exists(&ctl_path) {
-        let _ = std::fs::remove_file(&ctl_path);
-        let _ = std::fs::remove_file(&part_path);
-    }
-
-    // 5. 预分配 .part
-    std::fs::File::create(&part_path)
-        .and_then(|f| f.set_len(probe.total))
-        .map_err(|e| DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string())))?;
-
     let task_throttle = spec.max_speed.map(|r| Arc::new(TokenBucket::new(Some(r))));
 
-    // 6. 分支：不支持 Range → 单线程顺序
+    // 4. 分支：不支持 Range → 单线程顺序（产品决策：不支持 Range 的任务不提供
+    //    暂停——无法续传，UI 将禁用；只支持取消）
     if !probe.supports_range {
+        // 无控制文件/续传概念：直接预分配 .part（File::create 顺带清掉陈旧内容）
+        std::fs::File::create(&part_path)
+            .and_then(|f| f.set_len(probe.total))
+            .map_err(|e| DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string())))?;
         let segments = vec![Segment { index: 0, start: 0, end: probe.total - 1, downloaded: 0 }];
         let shared = Shared::new(spec.url.clone(), filename.clone(), probe, segments);
         let reporter = spawn_reporter(shared.clone(), progress_tx.clone(), None);
-        let exit = sequential_worker(client, spec, &shared, &part_path, global, &task_throttle, retry).await;
+        // sequential_worker 参数保持引用形态（Task 8 签名）；fut 借用局部变量，
+        // select! 挂在 &mut fut 上，不需要 'static
+        let mut fut = Box::pin(sequential_worker(
+            client, spec, &shared, &part_path, global, &task_throttle, retry,
+        ));
+        let exit = tokio::select! {
+            res = &mut fut => res,
+            msg = control_rx.recv() => {
+                if matches!(msg, Some(ControlMsg::Cancel)) || msg.is_none() {
+                    // 句柄全部丢弃 = 无人再观察此任务 → 取消
+                    shared.cancelled.store(true, Ordering::Relaxed);
+                    let _ = (&mut fut).await;
+                    shared.finished.store(true, Ordering::Relaxed);
+                    let _ = reporter.await;
+                    let _ = std::fs::remove_file(&part_path);
+                    let _ = std::fs::remove_file(&ctl_path);
+                    return Err(DownloadEnd::Cancelled);
+                }
+                tracing::warn!("不支持 Range 的任务无法暂停，忽略 Pause");
+                (&mut fut).await
+            }
+        };
         shared.finished.store(true, Ordering::Relaxed);
         let _ = reporter.await;
         match exit {
             Ok(WorkerExit::Done) => {
-                finalize(&shared, &final_path, &part_path, &ctl_path).map_err(DownloadEnd::Failed)?;
-                Ok(())
+                finalize(&shared, &final_path, &part_path, &ctl_path).map_err(DownloadEnd::Failed)
             }
-            Ok(_) => Err(DownloadEnd::Cancelled), // Task 8 中标志只可能因 Drop abort 而中断
+            Ok(_) => Err(DownloadEnd::Cancelled),
             Err(e) => Err(DownloadEnd::Failed(e)),
         }
     } else {
-        let segments = crate::segment::split(probe.total, spec.segments);
-        let shared = Shared::new(spec.url.clone(), filename.clone(), probe, segments);
-        let reporter = spawn_reporter(shared.clone(), progress_tx.clone(), Some(final_path.clone()));
-        let n = shared.segments.lock().unwrap().len();
-        let mut workers = Vec::with_capacity(n);
-        for i in 0..n {
-            let seg = shared.segment(i);
-            workers.push(tokio::spawn(segment_worker(
+        // 5. 恢复或全新（首次构造；RestartNeeded 时会重建）。
+        //    .part 是控制文件进度的物理载体：缺失或尺寸不符 → 进度已无可信落盘，
+        //    控制文件一并作废从零重下（数据正确性红线：宁弃进度不用可疑偏移）
+        let part_backed = std::fs::metadata(&part_path)
+            .map(|m| m.len() == probe.total)
+            .unwrap_or(false);
+        let mut shared: Arc<Shared> = if control_file::exists(&ctl_path) && part_backed {
+            match control_file::load(&ctl_path) {
+                Ok(cf)
+                    if cf.url == spec.url
+                        && cf.total_size == probe.total
+                        && cf.supports_range
+                        && validator_matches(&cf.etag, &probe.etag)
+                        && validator_matches(&cf.last_modified, &probe.last_modified) =>
+                {
+                    let done: u64 = cf.segments.iter().map(|s| s.downloaded).sum();
+                    let shared =
+                        Shared::new(spec.url.clone(), filename.clone(), probe, cf.segments);
+                    // 关键：恢复时初始化总进度计数（downloaded 是各分片的派生和），
+                    // 否则 finalize 的总量校验必然失败
+                    shared.downloaded.store(done, Ordering::Relaxed);
+                    shared
+                }
+                _ => {
+                    // 远端已变化 / 控制文件损坏：清掉从零重下（数据正确性红线）
+                    let _ = std::fs::remove_file(&ctl_path);
+                    let _ = std::fs::remove_file(&part_path);
+                    fresh_shared(spec, filename.clone(), probe)
+                }
+            }
+        } else {
+            let _ = std::fs::remove_file(&ctl_path);
+            fresh_shared(spec, filename.clone(), probe)
+        };
+        // 恢复场景下 .part 可能缺失/被截：确保存在且大小正确
+        // （全新路径在上面刚删过；恢复路径尺寸已在 part_backed 核对）
+        {
+            let ok = std::fs::metadata(&part_path)
+                .map(|m| m.len() == shared.probe.total)
+                .unwrap_or(false);
+            if !ok {
+                std::fs::File::create(&part_path)
+                    .and_then(|f| f.set_len(shared.probe.total))
+                    .map_err(|e| DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string())))?;
+            }
+        }
+        let mut reporter =
+            spawn_reporter(shared.clone(), progress_tx.clone(), Some(final_path.clone()));
+        loop {
+            let result = drive_download(
                 client.clone(),
                 spec.clone(),
                 shared.clone(),
-                seg,
                 part_path.clone(),
-                Some(final_path.clone()),
+                final_path.clone(),
                 global.clone(),
                 task_throttle.clone(),
                 retry.clone(),
-            )));
+                progress_tx.clone(),
+                control_rx, // 隐式重借用（参数本身已是 &mut）
+            )
+            .await;
+            shared.finished.store(true, Ordering::Relaxed);
+            let _ = reporter.await;
+            match result {
+                Err(DownloadEnd::RestartNeeded) => {
+                    // 暂停期间远端已变化：清零重下（数据正确性红线）
+                    let _ = std::fs::remove_file(&ctl_path);
+                    let _ = std::fs::remove_file(&part_path);
+                    let probe2 = probe::probe(client, &spec.url)
+                        .await
+                        .map_err(DownloadEnd::Failed)?;
+                    crate::disk::check_space(
+                        &spec.save_dir,
+                        crate::disk::required_space(probe2.total),
+                    )
+                    .map_err(DownloadEnd::Failed)?;
+                    shared = fresh_shared(spec, filename.clone(), probe2);
+                    std::fs::File::create(&part_path)
+                        .and_then(|f| f.set_len(shared.probe.total))
+                        .map_err(|e| {
+                            DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string()))
+                        })?;
+                    reporter =
+                        spawn_reporter(shared.clone(), progress_tx.clone(), Some(final_path.clone()));
+                    continue;
+                }
+                Ok(()) => {
+                    finalize(&shared, &final_path, &part_path, &ctl_path)
+                        .map_err(DownloadEnd::Failed)?;
+                    return Ok(());
+                }
+                Err(DownloadEnd::Cancelled) => {
+                    let _ = std::fs::remove_file(&part_path);
+                    let _ = std::fs::remove_file(&ctl_path);
+                    return Err(DownloadEnd::Cancelled);
+                }
+                Err(e) => return Err(e),
+            }
         }
-        let mut failure: Option<SparklingError> = None;
-        let mut cancelled = false;
-        for w in workers {
-            match w.await {
-                Ok(Ok(WorkerExit::Done)) => {}
-                Ok(Ok(_)) | Err(_) => cancelled = true, // Paused/Cancelled/Failed/abort
-                Ok(Err(e)) => {
-                    if failure.is_none() {
-                        failure = Some(e);
+    }
+}
+
+fn fresh_shared(spec: &TaskSpec, filename: String, probe: ProbeResult) -> Arc<Shared> {
+    let segments = crate::segment::split(probe.total, spec.segments);
+    Shared::new(spec.url.clone(), filename, probe, segments)
+}
+
+/// 批次驱动：每轮把剩余段中最大的 initial_workers 个交给 worker；
+/// select 控制面处理暂停/恢复/取消；全批完成或偷段收尾后进入下一轮。
+#[allow(clippy::too_many_arguments)]
+async fn drive_download(
+    client: reqwest::Client,
+    spec: TaskSpec,
+    shared: Arc<Shared>,
+    part_path: PathBuf,
+    final_path: PathBuf,
+    global: Arc<TokenBucket>,
+    task: Option<Arc<TokenBucket>>,
+    retry: RetryPolicy,
+    progress_tx: watch::Sender<ProgressSnapshot>,
+    control_rx: &mut UnboundedReceiver<ControlMsg>,
+) -> std::result::Result<(), DownloadEnd> {
+    let initial_workers = (spec.segments.max(1) as usize).max(1);
+    'batches: loop {
+        let batch: Vec<Segment> = {
+            let mut g = shared.segments.lock().unwrap();
+            g.sort_by(|a, b| b.remaining().cmp(&a.remaining()));
+            g.iter().filter(|s| s.remaining() > 0).take(initial_workers).cloned().collect()
+        };
+        if batch.is_empty() {
+            return Ok(()); // 全部完成
+        }
+        let workers: Vec<_> = batch
+            .into_iter()
+            .map(|seg| {
+                tokio::spawn(segment_worker(
+                    client.clone(), spec.clone(), shared.clone(), seg,
+                    part_path.clone(), Some(final_path.clone()),
+                    global.clone(), task.clone(), retry.clone(),
+                ))
+            })
+            .collect();
+        let mut all = futures::future::join_all(workers);
+
+        let outcomes = loop {
+            tokio::select! {
+                res = &mut all => break res,
+                msg = control_rx.recv() => {
+                    match msg {
+                        Some(ControlMsg::Pause) => {
+                            shared.paused.store(true, Ordering::Relaxed);
+                            // select! 的落选分支 future（&mut all）在进入本臂前已
+                            // 释放借用，这里可以重新 await 它
+                            let outcomes = all.await; // worker 在块边界退出
+                            if let Some(end) = check_fatal(&outcomes, &shared) {
+                                return Err(end);
+                            }
+                            save_ctl(&shared, &final_path);
+                            send_state(&progress_tx, TaskState::Paused);
+                            loop {
+                                match control_rx.recv().await {
+                                    Some(ControlMsg::Resume) => {
+                                        // 数据正确性红线：恢复前重新探测，
+                                        // 远端已变化 → RestartNeeded → 整任务从零重下
+                                        let p = probe::probe(&client, &spec.url)
+                                            .await
+                                            .map_err(DownloadEnd::Failed)?;
+                                        let unchanged = p.total == shared.probe.total
+                                            && validator_matches(&shared.probe.etag, &p.etag)
+                                            && validator_matches(
+                                                &shared.probe.last_modified,
+                                                &p.last_modified,
+                                            );
+                                        if unchanged {
+                                            shared.paused.store(false, Ordering::Relaxed);
+                                            continue 'batches; // 重新组批续传
+                                        } else {
+                                            return Err(DownloadEnd::RestartNeeded);
+                                        }
+                                    }
+                                    Some(ControlMsg::Cancel) | None => {
+                                        shared.cancelled.store(true, Ordering::Relaxed);
+                                        return Err(DownloadEnd::Cancelled);
+                                    }
+                                    Some(ControlMsg::Pause) => {} // 已暂停，忽略重复暂停
+                                }
+                            }
+                        }
+                        Some(ControlMsg::Cancel) | None => {
+                            shared.cancelled.store(true, Ordering::Relaxed);
+                            let _ = all.await; // 等 worker 退出，避免与清理竞态
+                            return Err(DownloadEnd::Cancelled);
+                        }
+                        Some(ControlMsg::Resume) => {} // 未暂停时的 Resume：忽略
                     }
                 }
             }
+        };
+        if let Some(end) = check_fatal(&outcomes, &shared) {
+            return Err(end);
         }
-        shared.finished.store(true, Ordering::Relaxed);
-        let _ = reporter.await;
-        if let Some(e) = failure {
-            // 保留控制文件与 .part：手动重试从分片断点继续（spec）
-            return Err(DownloadEnd::Failed(e));
-        }
-        if cancelled {
-            let _ = std::fs::remove_file(&part_path);
-            let _ = std::fs::remove_file(&ctl_path);
-            return Err(DownloadEnd::Cancelled);
-        }
-        finalize(&shared, &final_path, &part_path, &ctl_path).map_err(DownloadEnd::Failed)?;
-        Ok(())
+        // 本批全 Done → 下一轮（偷段阈值以下的尾段在这里收尾）
+    }
+}
+
+/// 暂停点/完成点把控制文件原子落盘（save 内部写 tmp 后 rename）
+fn save_ctl(shared: &Arc<Shared>, final_path: &Path) {
+    let _ = control_file::save(final_path, &shared.build_control_file());
+}
+
+/// 在不丢其它字段的前提下更新 watch 状态（暂停帧的 downloaded 沿用最后一帧，
+/// 暂停后 reporter 停发周期帧，该帧成为暂停期间最后一帧——进度冻结语义）
+fn send_state(progress_tx: &watch::Sender<ProgressSnapshot>, state: TaskState) {
+    let mut snap = progress_tx.subscribe().borrow().clone();
+    snap.state = state;
+    let _ = progress_tx.send(snap);
+}
+
+/// worker 批次的聚合结果：外层 Result 是 join（panic/abort → JoinError），
+/// 内层 Result 是 worker 自身返回值
+type WorkerOutcome =
+    std::result::Result<std::result::Result<WorkerExit, SparklingError>, tokio::task::JoinError>;
+
+fn first_error(outcomes: &[WorkerOutcome]) -> Option<SparklingError> {
+    outcomes.iter().find_map(|r| match r {
+        Ok(Err(e)) => Some(e.clone()),
+        Err(join) => Some(SparklingError::Other(format!("下载线程异常退出: {join}"))),
+        _ => None,
+    })
+}
+
+/// 批次结束后判定终态：worker 报错 > 任务失败标志 > 取消标志；均无 → 继续下一轮
+fn check_fatal(outcomes: &[WorkerOutcome], shared: &Shared) -> Option<DownloadEnd> {
+    if let Some(e) = first_error(outcomes) {
+        return Some(DownloadEnd::Failed(e));
+    }
+    if let Some(e) = shared.failed.lock().unwrap().clone() {
+        return Some(DownloadEnd::Failed(e));
+    }
+    if shared.cancelled.load(Ordering::Relaxed) {
+        return Some(DownloadEnd::Cancelled);
+    }
+    None
+}
+
+/// 校验器（ETag / Last-Modified）记录值与当前值是否兼容。
+/// 任一方缺失视为无法判定 → 兼容（按大小兜底）。
+fn validator_matches(recorded: &Option<String>, current: &Option<String>) -> bool {
+    match (recorded, current) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
     }
 }
 
@@ -373,8 +599,11 @@ fn part_path_for(final_path: &Path) -> PathBuf {
 /// 终局保证：finished 置位后发送**最后一帧最新快照**再退出——supervise 的终态
 /// 快照从 watch 借用的是最后一帧，缺这一帧则终态 downloaded 最多旧 250ms。
 /// 周期帧发送失败（接收端全部掉线，abort 场景）时退出，防止任务泄漏。
-/// ctl = Some(正式文件路径) 时每 2 秒（8 × 250ms）原子保存控制文件，
-/// 运行中的任务崩溃后可凭 `.sparkling` 控制文件续传（Task 11 接入）。
+/// ctl = Some(正式文件路径) 时每个周期**先原子落盘控制文件再发帧**：观察到
+/// 进度 > N 的帧 ⇒ 控制文件已记录同一派生总量（同一同步块内读取），崩溃恢复
+/// 的断点新鲜度与进度上报粒度一致（250ms）。
+/// 暂停期间不发周期帧：send_state 的 Paused 帧是暂停期间最后一帧（进度冻结
+/// 语义），也不覆盖暂停点落盘的控制文件。
 fn spawn_reporter(
     shared: Arc<Shared>,
     progress_tx: watch::Sender<ProgressSnapshot>,
@@ -384,13 +613,17 @@ fn spawn_reporter(
         let mut interval = tokio::time::interval(Duration::from_millis(250));
         let mut window: std::collections::VecDeque<(tokio::time::Instant, u64)> =
             std::collections::VecDeque::new();
-        let mut tick: u32 = 0;
         loop {
             interval.tick().await;
+            let state = if shared.paused.load(Ordering::Relaxed) {
+                TaskState::Paused
+            } else {
+                TaskState::Running
+            };
             if shared.finished.load(Ordering::Relaxed) {
                 // 最后一帧：downloaded 取当下值（终态快照依赖）
                 let _ = progress_tx.send(ProgressSnapshot {
-                    state: TaskState::Running,
+                    state,
                     downloaded: shared.downloaded.load(Ordering::Relaxed),
                     total: shared.probe.total,
                     speed: 0,
@@ -398,6 +631,13 @@ fn spawn_reporter(
                     error: None,
                 });
                 break;
+            }
+            if shared.paused.load(Ordering::Relaxed) {
+                continue; // 暂停中：Paused 帧已由 send_state 发出，保持冻结
+            }
+            // 先落盘控制文件再发帧（帧与控制文件同一同步块读同一派生总量）
+            if let Some(final_path) = &ctl {
+                let _ = control_file::save(final_path, &shared.build_control_file());
             }
             let now = tokio::time::Instant::now();
             let dl = shared.downloaded.load(Ordering::Relaxed);
@@ -425,13 +665,6 @@ fn spawn_reporter(
                 .is_err()
             {
                 break; // 接收端全部掉线（abort）：退出防泄漏
-            }
-            tick += 1;
-            if tick % 8 == 0 {
-                // 每 2 秒保存控制文件
-                if let Some(final_path) = &ctl {
-                    let _ = control_file::save(final_path, &shared.build_control_file());
-                }
             }
         }
     })
