@@ -2126,7 +2126,10 @@ fn part_path_for(final_path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// 进度上报器：250ms 快照 + 3 秒滑动窗口测速
+/// 进度上报器：250ms 快照 + 3 秒滑动窗口测速。
+/// 终局保证：finished 置位后发送**最后一帧最新快照**再退出——supervise 的终态
+/// 快照从 watch 借用的是最后一帧，缺这一帧则终态 downloaded 最多旧 250ms。
+/// 周期帧发送失败（接收端全部掉线，abort 场景）时退出，防止任务泄漏。
 fn spawn_reporter(
     shared: Arc<Shared>,
     progress_tx: watch::Sender<ProgressSnapshot>,
@@ -2138,6 +2141,15 @@ fn spawn_reporter(
         loop {
             interval.tick().await;
             if shared.finished.load(Ordering::Relaxed) {
+                // 最后一帧：downloaded 取当下值（终态快照依赖）
+                let _ = progress_tx.send(ProgressSnapshot {
+                    state: TaskState::Running,
+                    downloaded: shared.downloaded.load(Ordering::Relaxed),
+                    total: shared.probe.total,
+                    speed: 0,
+                    segments: shared.snapshot_segments(),
+                    error: None,
+                });
                 break;
             }
             let now = tokio::time::Instant::now();
@@ -2154,14 +2166,19 @@ fn spawn_reporter(
                 .front()
                 .map(|(t, d)| ((dl.saturating_sub(*d)) as f64 / now.duration_since(*t).as_secs_f64()) as u64)
                 .unwrap_or(0);
-            let _ = progress_tx.send(ProgressSnapshot {
-                state: TaskState::Running,
-                downloaded: dl,
-                total: shared.probe.total,
-                speed,
-                segments: shared.snapshot_segments(),
-                error: None,
-            });
+            if progress_tx
+                .send(ProgressSnapshot {
+                    state: TaskState::Running,
+                    downloaded: dl,
+                    total: shared.probe.total,
+                    speed,
+                    segments: shared.snapshot_segments(),
+                    error: None,
+                })
+                .is_err()
+            {
+                break; // 接收端全部掉线（abort）：退出防泄漏
+            }
         }
     })
 }
@@ -2567,7 +2584,19 @@ async fn segment_worker(
             return Ok(WorkerExit::Done);
         }
         let resp = match fetch_range(&client, &spec.url, seg.next_offset(), Some(seg.end)).await {
-            Ok(r) => r,
+            // 206 守卫：带 Range 的请求若被中间层忽略返回 200 全量，
+            // 按段偏移写入会损坏 .part —— 视为可重试错误
+            Ok(r) if r.status().as_u16() == 206 => r,
+            Ok(_) => {
+                attempt += 1;
+                if attempt > retry.max_retries {
+                    let e = SparklingError::Network("服务器忽略 Range 请求".into());
+                    shared.fail(e.clone());
+                    return Err(e);
+                }
+                tokio::time::sleep(retry.backoff(attempt)).await;
+                continue;
+            }
             Err(e) => {
                 attempt += 1;
                 if attempt > retry.max_retries {
