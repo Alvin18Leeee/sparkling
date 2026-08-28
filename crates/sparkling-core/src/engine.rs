@@ -31,9 +31,9 @@ pub enum ControlMsg {
 /// 提交后返回的任务句柄；Clone 后可多方持有（manager、事件转发等）
 #[derive(Clone)]
 pub struct TaskHandle {
-    id: TaskId,
-    progress: watch::Receiver<ProgressSnapshot>,
-    control: mpsc::UnboundedSender<ControlMsg>,
+    pub(crate) id: TaskId,
+    pub(crate) progress: watch::Receiver<ProgressSnapshot>,
+    pub(crate) control: mpsc::UnboundedSender<ControlMsg>,
 }
 
 impl TaskHandle {

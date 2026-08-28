@@ -18,6 +18,7 @@ fs2 = "0.4"
 percent-encoding = "2"
 bytes = "1"
 tracing = "0.1"
+futures = "0.3"
 
 [dev-dependencies]
 # start_paused 测试需要 test-util（不在 full 里）
@@ -25,7 +26,6 @@ tokio = { version = "1", features = ["test-util"] }
 axum = "0.7"
 tempfile = "3"
 sha2 = "0.10"
-futures = "0.3"
 
 # tests/common/mod.rs 是共享模块（Task 7+ 各测试文件 `mod common;` 引用），
 # cargo 自动发现只认 tests/*.rs 与 tests/*/main.rs，需显式声明才能
