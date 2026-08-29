@@ -179,6 +179,20 @@ pub fn extract_error(stderr: &str) -> String {
     t.chars().skip(n - 200).collect()
 }
 
+/// 分片名结构校验：`f` + 全数字 + `.` + 非空扩展名（可选 `.part` 后缀）。
+/// 旧的"f + 首字符数字"启发式会误删 `X.f4v` 等真实完成文件（remove_task
+/// 对已完成任务也调 cleanup）
+fn is_fragment_name(rest: &str) -> bool {
+    let body = rest.strip_suffix(".part").unwrap_or(rest);
+    let Some(after_f) = body.strip_prefix('f') else {
+        return false;
+    };
+    let Some((digits, ext)) = after_f.split_once('.') else {
+        return false;
+    };
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && !ext.is_empty()
+}
+
 /// 取消/移除时清理 yt-dlp 残留：<名>.part、<名>.ytdl、<名>.fNNN.* 分片
 pub fn cleanup_partial(save_dir: &Path, filename: &str) {
     let Ok(rd) = std::fs::read_dir(save_dir) else {
@@ -191,13 +205,7 @@ pub fn cleanup_partial(save_dir: &Path, filename: &str) {
             continue;
         };
         let is_part = rest.ends_with(".part") || rest.ends_with(".ytdl");
-        let is_fragment = rest.starts_with('f')
-            && rest[1..]
-                .chars()
-                .next()
-                .map(|c| c.is_ascii_digit())
-                .unwrap_or(false);
-        if is_part || is_fragment {
+        if is_part || is_fragment_name(rest) {
             let _ = std::fs::remove_file(e.path());
         }
     }
@@ -562,6 +570,9 @@ mod tests {
         std::fs::write(save.join("测试视频.mp4.part"), b"x").unwrap();
         std::fs::write(save.join("测试视频.f137.mp4"), b"x").unwrap();
         std::fs::write(save.join("无关文件.txt"), b"x").unwrap();
+        // f4v 是真实完成文件（remove_task 对已完成任务也调 cleanup），
+        // 不得被"f + 首字符数字"启发式误删
+        std::fs::write(save.join("测试视频.f4v"), b"x").unwrap();
         let runner = Arc::new(FakeRunner::default());
         runner.scripts.lock().unwrap().push_back(vec![
             ScriptStep::Lines(&["SPARKLING|10|1000|1000|100"]),
@@ -576,6 +587,47 @@ mod tests {
         assert!(!save.join("测试视频.mp4.part").exists(), ".part 应被清理");
         assert!(!save.join("测试视频.f137.mp4").exists(), "分片残留应被清理");
         assert!(save.join("无关文件.txt").exists(), "无关文件不得误删");
+        assert!(
+            save.join("测试视频.f4v").exists(),
+            "f4v 真实完成文件不得误删"
+        );
+    }
+
+    #[test]
+    fn cleanup_partial_fragment_heuristic_is_structural() {
+        let dir = tempfile::tempdir().unwrap();
+        let save = dir.path();
+        for name in [
+            "测试视频.mp4.part",
+            "测试视频.f137.mp4",
+            "测试视频.f137.mp4.part",
+        ] {
+            std::fs::write(save.join(name), b"x").unwrap();
+        }
+        for name in [
+            "测试视频.f4v",
+            "测试视频.f137",      // 无扩展名：不匹配 f+数字+.+ext 结构
+            "测试视频.final.mp4", // f 后非全数字
+            "无关文件.txt",
+        ] {
+            std::fs::write(save.join(name), b"x").unwrap();
+        }
+        cleanup_partial(save, "测试视频");
+        for name in [
+            "测试视频.mp4.part",
+            "测试视频.f137.mp4",
+            "测试视频.f137.mp4.part",
+        ] {
+            assert!(!save.join(name).exists(), "{name} 应被清理");
+        }
+        for name in [
+            "测试视频.f4v",
+            "测试视频.f137",
+            "测试视频.final.mp4",
+            "无关文件.txt",
+        ] {
+            assert!(save.join(name).exists(), "{name} 不得误删");
+        }
     }
 
     #[tokio::test]

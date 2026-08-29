@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Alvin18Leeee/sparkling/actions/workflows/ci.yml/badge.svg)](https://github.com/Alvin18Leeee/sparkling/actions/workflows/ci.yml)
 
-PC 端全功能下载器。当前为子项目①：HTTP/HTTPS 多线程下载核心。
+PC 端全功能下载器。当前已完成：① HTTP/HTTPS 多线程下载核心、③ 视频解析下载（yt-dlp）。
 
 ## 功能
 

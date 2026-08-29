@@ -53,6 +53,7 @@ export default function VideoInfoPanel({
     entries: PlaylistEntry[] | null;
     audioOnly: boolean;
     maxHeight: number | null;
+    remember: boolean;
   }) => void;
   onCancel: () => void;
   busy: boolean;
@@ -61,6 +62,8 @@ export default function VideoInfoPanel({
   const [quality, setQuality] = useState(options[0]?.id ?? '');
   const [subLangs, setSubLangs] = useState(defaultSubLangs);
   const [autoSubs, setAutoSubs] = useState(defaultAutoSubs);
+  // D4：选择记住为下次默认（画质 + 字幕），默认勾选
+  const [remember, setRemember] = useState(true);
   const [selected, setSelected] = useState<Set<number>>(() =>
     new Set((info.playlist ?? []).map((_, i) => i))
   );
@@ -81,6 +84,7 @@ export default function VideoInfoPanel({
       maxHeight: isPlaylist
         ? playlistFormat === 'ba/b' ? null : (preference?.video_max_height ?? null)
         : selectedOpt?.id.startsWith('h') ? Number(selectedOpt.id.slice(1)) : null,
+      remember,
     });
   };
 
@@ -153,6 +157,10 @@ export default function VideoInfoPanel({
       <label className="checkbox">
         <input type="checkbox" checked={autoSubs} onChange={(e) => setAutoSubs(e.target.checked)} />
         包含自动生成字幕（CC）
+      </label>
+      <label className="checkbox">
+        <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+        记住此选择（作为下次默认）
       </label>
 
       <div className="modal-actions">

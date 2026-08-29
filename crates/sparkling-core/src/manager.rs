@@ -175,12 +175,19 @@ impl TaskManager {
         if opts.kind == TaskKind::Video {
             segments = 1;
         }
+        // 视频文件名来自远端标题（probe 的 t.title，攻击者可控）："C:\evil" 会让
+        // 引擎侧 PathBuf::join 整体替换 save_dir（写任意盘符），"a/b" 会静默建
+        // 子目录——入队前消毒。HTTP 路径在引擎内已消毒，此处只拦视频分支
+        let filename = match (opts.kind, opts.filename) {
+            (TaskKind::Video, Some(name)) => Some(crate::http_engine::sanitize_filename(&name)),
+            (_, filename) => filename,
+        };
         let rec = TaskRecord {
             id: id.clone(),
             url,
             state: TaskState::Queued,
             save_dir: opts.save_dir.display().to_string(),
-            filename: opts.filename,
+            filename,
             segments,
             max_speed: opts.max_speed,
             kind: opts.kind,

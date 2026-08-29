@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api';
-import type { ManagerConfig, VideoInfo } from '../types';
+import type { ManagerConfig, VideoInfo, VideoMeta } from '../types';
 import { looksLikeVideoUrl, selectorFromPreference } from '../types';
 import VideoInfoPanel from './VideoInfoPanel';
 
@@ -71,21 +71,48 @@ export default function AddTaskDialog({
     entries: { url: string; title: string }[] | null;
     audioOnly: boolean;
     maxHeight: number | null;
+    remember: boolean;
   }) => {
     if (!video || video === 'probing') return; // 仅面板态可达；顺带收窄类型
     setBusy(true);
     setErr(null);
     try {
-      const targets = c.entries ?? [{ url: url.trim(), title: video.info.title }];
+      const info = video.info;
+      const targets = c.entries ?? [{ url: url.trim(), title: info.title }];
       for (const t of targets) {
+        // 单视频：probe 已取回完整元数据；播放列表条目（flat-playlist）只有
+        // 标题可用，其余字段 null。TaskRow 的 video_meta?.title 分支由此激活
+        const meta: VideoMeta = c.entries
+          ? { title: t.title, duration_sec: null, thumbnail: null, uploader: null, webpage_url: null }
+          : {
+              title: info.title,
+              duration_sec: info.duration_sec,
+              thumbnail: info.thumbnail,
+              uploader: info.uploader,
+              webpage_url: info.webpage_url,
+            };
         await api.addVideoTask(
           t.url,
           { format: c.format, subtitles: c.subtitles, auto_subs: c.auto_subs },
           t.title,
-          null
+          meta
         );
       }
       onAdded();
+      // D4「记住此选择」：当前画质/字幕偏好写回配置。preference 为 null
+      // （config 未加载）时无基准可合并 HTTP 四字段，跳过整个记住逻辑；
+      // 失败静默降级——任务已入队，主操作不受影响
+      if (c.remember && preference) {
+        await api
+          .updateConfig({
+            ...preference,
+            video_max_height: c.audioOnly ? null : c.maxHeight,
+            video_audio_only: c.audioOnly,
+            video_sub_langs: c.subtitles.join(','),
+            video_auto_subs: c.auto_subs,
+          })
+          .catch(() => {});
+      }
     } catch (e) {
       setErr(String(e));
     } finally {

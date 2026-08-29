@@ -93,6 +93,33 @@ async fn paused_video_task_resumes_after_restart_recover() {
 }
 
 #[tokio::test]
+async fn video_filename_sanitized_on_add() {
+    // 视频标题是远端攻击者可控输入："a/b" 会让引擎 join 出子目录、
+    // "C:\evil" 会整体替换 save_dir（写任意盘符）——add_task 必须先消毒
+    let runner = Arc::new(FakeRunner::default());
+    let dir = tempfile::tempdir().unwrap();
+    let m = manager(&dir, runner, ManagerConfig::default());
+    for (malicious, expected) in [("a/b", "b"), ("C:\\evil", "evil")] {
+        let mut opts = video_opts(&dir);
+        opts.filename = Some(malicious.into());
+        let id = m
+            .add_task("https://www.youtube.com/watch?v=t".into(), opts)
+            .unwrap();
+        let rec = m
+            .list_tasks()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert_eq!(
+            rec.filename.as_deref(),
+            Some(expected),
+            "恶意文件名 {malicious:?} 应被消毒为 {expected:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn mixed_queue_shares_concurrency_slots() {
     // 视频任务占满并发位时，后续任务排队等待。FakeRunner 脚本无法中途放行，
     // 改用可完成的慢任务：大量 Lines（几十毫秒量级）

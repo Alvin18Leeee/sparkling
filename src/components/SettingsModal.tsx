@@ -39,7 +39,9 @@ export default function SettingsModal({
     setCookieMsg(null);
     try {
       setYtdlp(await api.updateYtdlp());
-      setCookieMsg({ text: 'yt-dlp 更新完成', isErr: false });
+      // 首次 bundled→app-data 转换后需重启才切到新版本；app-data 同版本重下
+      // 则下次 spawn 即生效——前端无法区分，统一提示
+      setCookieMsg({ text: 'yt-dlp 已更新，如版本未刷新请重启应用', isErr: false });
     } catch (e) {
       setCookieMsg({ text: String(e), isErr: true });
     } finally {
@@ -51,7 +53,8 @@ export default function SettingsModal({
     setCookieMsg(null);
     try {
       await api.importCookies(cookieBrowser);
-      setCookieMsg({ text: 'Cookie 已导入', isErr: false });
+      // cookie 路径在应用启动时判定（VideoEngine 构造），导入后需重启才接入
+      setCookieMsg({ text: 'Cookie 已导入，重启应用后生效', isErr: false });
     } catch (e) {
       setCookieMsg({ text: String(e), isErr: true });
     } finally {

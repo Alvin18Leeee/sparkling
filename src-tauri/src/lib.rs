@@ -143,14 +143,21 @@ fn update_config(state: State<AppState>, cfg: ManagerConfig) -> Result<(), Strin
     persist_config(&state.config_path, &cfg)
 }
 
-/// 视频解析：yt-dlp -J --flat-playlist（60s 超时；stdout 全量收集后解析）
+/// 视频解析：yt-dlp -J --flat-playlist（60s 超时；stdout 全量收集后解析）。
+/// cookie 文件存在时带上——否则 B 站会员等登录内容的 probe 看不到会员档位
 #[tauri::command]
 async fn probe_video(state: State<'_, AppState>, url: String) -> Result<VideoInfo, String> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let runner = state.video.runner.clone();
+    let mut args = vec!["-J".into(), "--flat-playlist".into()];
+    if state.video.cookie_file.exists() {
+        args.push("--cookies".into());
+        args.push(state.video.cookie_file.display().to_string());
+    }
+    args.push(url);
     let mut handle = runner
         .start(
-            vec!["-J".into(), "--flat-playlist".into(), url],
+            args,
             Box::new(move |l| {
                 let _ = tx.send(l.to_string());
             }),
