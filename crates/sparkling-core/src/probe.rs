@@ -24,13 +24,20 @@ pub async fn probe(client: &reqwest::Client, url: &str) -> Result<ProbeResult> {
         .map_err(|e| SparklingError::Network(e.to_string()))?;
     // 服务器对 Range=0-0 也回 416：Range 实现有问题 → 退回无 Range 探测
     let resp = if resp.status().as_u16() == 416 {
-        client.get(url).send().await.map_err(|e| SparklingError::Network(e.to_string()))?
+        client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| SparklingError::Network(e.to_string()))?
     } else {
         resp
     };
     let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
-        return Err(SparklingError::HttpStatus { status, detail: format!("探测失败: {url}") });
+        return Err(SparklingError::HttpStatus {
+            status,
+            detail: format!("探测失败: {url}"),
+        });
     }
     let supports_range = status == 206;
     let headers = resp.headers();
@@ -52,8 +59,7 @@ pub async fn probe(client: &reqwest::Client, url: &str) -> Result<ProbeResult> {
             .ok_or_else(|| SparklingError::Network("服务器未提供文件大小，暂不支持".into()))?
     };
 
-    let filename = filename_from_headers(headers)
-        .unwrap_or_else(|| filename_from_url(url));
+    let filename = filename_from_headers(headers).unwrap_or_else(|| filename_from_url(url));
 
     Ok(ProbeResult {
         total,
@@ -65,13 +71,22 @@ pub async fn probe(client: &reqwest::Client, url: &str) -> Result<ProbeResult> {
     })
 }
 
-fn header_string(headers: &reqwest::header::HeaderMap, name: impl reqwest::header::AsHeaderName) -> Option<String> {
-    headers.get(name).and_then(|v| v.to_str().ok()).map(|s| s.to_string())
+fn header_string(
+    headers: &reqwest::header::HeaderMap,
+    name: impl reqwest::header::AsHeaderName,
+) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
 }
 
 /// 解析 Content-Disposition 的 filename= / filename*=UTF-8''
 fn filename_from_headers(headers: &reqwest::header::HeaderMap) -> Option<String> {
-    let cd = headers.get(reqwest::header::CONTENT_DISPOSITION)?.to_str().ok()?;
+    let cd = headers
+        .get(reqwest::header::CONTENT_DISPOSITION)?
+        .to_str()
+        .ok()?;
     for part in cd.split(';') {
         let part = part.trim();
         if let Some(v) = part.strip_prefix("filename*=UTF-8''") {
@@ -89,5 +104,9 @@ fn filename_from_url(url: &str) -> String {
     let path = url.split(['?', '#']).next().unwrap_or(url);
     let last = path.rsplit('/').next().unwrap_or("");
     let decoded = percent_decode_str(last).decode_utf8_lossy().into_owned();
-    if decoded.is_empty() { "download".to_string() } else { decoded }
+    if decoded.is_empty() {
+        "download".to_string()
+    } else {
+        decoded
+    }
 }

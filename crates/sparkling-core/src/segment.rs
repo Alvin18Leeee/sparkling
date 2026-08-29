@@ -39,7 +39,12 @@ pub fn split(total: u64, n: u32) -> Vec<Segment> {
     let mut start = 0u64;
     for i in 0..n {
         let len = base + if i < rem { 1 } else { 0 };
-        segs.push(Segment { index: i as usize, start, end: start + len - 1, downloaded: 0 });
+        segs.push(Segment {
+            index: i as usize,
+            start,
+            end: start + len - 1,
+            downloaded: 0,
+        });
         start += len;
     }
     segs
@@ -54,7 +59,12 @@ pub fn take_over(from: &mut Segment, new_index: usize) -> Option<Segment> {
     }
     let half = rem / 2;
     let new_start = from.next_offset() + half;
-    let stolen = Segment { index: new_index, start: new_start, end: from.end, downloaded: 0 };
+    let stolen = Segment {
+        index: new_index,
+        start: new_start,
+        end: from.end,
+        downloaded: 0,
+    };
     from.end = new_start - 1;
     Some(stolen)
 }

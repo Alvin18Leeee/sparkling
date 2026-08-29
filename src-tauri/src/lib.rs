@@ -37,7 +37,10 @@ fn add_task(
         segments,
         max_speed: None,
     };
-    state.manager.add_task(url, opts).map_err(|e| e.user_message())
+    state
+        .manager
+        .add_task(url, opts)
+        .map_err(|e| e.user_message())
 }
 
 #[tauri::command]
@@ -204,7 +207,11 @@ pub fn run() {
                 tauri::async_runtime::handle().inner().clone(),
             )
             .expect("初始化任务管理器失败");
-            app.manage(AppState { manager, config_path, default_save_dir });
+            app.manage(AppState {
+                manager,
+                config_path,
+                default_save_dir,
+            });
 
             // 恢复上次未完成任务（默认自动续传）
             {
@@ -238,8 +245,16 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            add_task, pause_task, resume_task, cancel_task, retry_task,
-            remove_task, move_to_top, list_tasks, get_config, update_config
+            add_task,
+            pause_task,
+            resume_task,
+            cancel_task,
+            retry_task,
+            remove_task,
+            move_to_top,
+            list_tasks,
+            get_config,
+            update_config
         ])
         .run(tauri::generate_context!())
         .expect("运行 Sparkling 失败");

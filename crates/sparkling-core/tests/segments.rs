@@ -19,12 +19,19 @@ fn spec(url: String, dir: &tempfile::TempDir, max_speed: Option<u64>) -> TaskSpe
 #[tokio::test]
 async fn multithread_download_completes() {
     // 1 MiB / 8 段 = 128KB < 偷段阈值 256KB → 不发生偷段，段数断言稳定
-    let server = start(ServerConfig { size: 1024 * 1024, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        size: 1024 * 1024,
+        ..Default::default()
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = HttpEngine::new(None);
     // 2 MB/s 限速：确保下载期间控制文件确已落盘（周期 + 分片完成点），
     // 使结尾的 !file.bin.sparkling.exists() 真正检验 finalize 的删除
-    let handle = engine.submit(spec(server.url.clone(), &dir, Some(2_000_000))).await.unwrap();
+    let handle = engine
+        .submit(spec(server.url.clone(), &dir, Some(2_000_000)))
+        .await
+        .unwrap();
     let mut rx = handle.subscribe();
     let snap = wait_state(&mut rx, TaskState::Completed, Duration::from_secs(30)).await;
     assert_eq!(snap.downloaded, 1024 * 1024);
@@ -38,7 +45,11 @@ async fn multithread_download_completes() {
 #[tokio::test]
 async fn control_file_persisted_while_running() {
     // 限速让任务持续 > 2s，验证控制文件周期落盘；随后 drop 引擎模拟崩溃
-    let server = start(ServerConfig { size: 4 * 1024 * 1024, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        size: 4 * 1024 * 1024,
+        ..Default::default()
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = HttpEngine::new(None);
     let handle = engine
@@ -48,10 +59,16 @@ async fn control_file_persisted_while_running() {
     let mut rx = handle.subscribe();
     wait_until(&mut rx, |s| s.downloaded > 100_000, Duration::from_secs(10)).await;
     tokio::time::sleep(Duration::from_secs(3)).await; // 越过 2s 保存周期
-    assert!(dir.path().join("file.bin.sparkling").exists(), "控制文件应周期性落盘");
+    assert!(
+        dir.path().join("file.bin.sparkling").exists(),
+        "控制文件应周期性落盘"
+    );
     drop(handle);
     drop(engine); // abort 全部 worker，模拟进程崩溃
-    assert!(dir.path().join("file.bin.sparkling.part").exists(), "崩溃后 .part 应保留");
+    assert!(
+        dir.path().join("file.bin.sparkling.part").exists(),
+        "崩溃后 .part 应保留"
+    );
 }
 
 #[tokio::test]
@@ -65,7 +82,10 @@ async fn stealing_eliminates_tail() {
     .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = HttpEngine::new(None);
-    let handle = engine.submit(spec(server.url.clone(), &dir, None)).await.unwrap();
+    let handle = engine
+        .submit(spec(server.url.clone(), &dir, None))
+        .await
+        .unwrap();
     let mut rx = handle.subscribe();
     let mut max_segments = 0usize;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
@@ -82,7 +102,10 @@ async fn stealing_eliminates_tail() {
         if tokio::time::Instant::now() >= deadline {
             panic!("下载超时");
         }
-        if tokio::time::timeout_at(deadline, rx.changed()).await.is_err() {
+        if tokio::time::timeout_at(deadline, rx.changed())
+            .await
+            .is_err()
+        {
             panic!("下载超时（通道关闭）");
         }
     }

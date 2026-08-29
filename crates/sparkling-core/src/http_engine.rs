@@ -34,14 +34,22 @@ pub struct RetryPolicy {
 
 impl Default for RetryPolicy {
     fn default() -> Self {
-        Self { max_retries: 5, initial: Duration::from_secs(1), max: Duration::from_secs(30) }
+        Self {
+            max_retries: 5,
+            initial: Duration::from_secs(1),
+            max: Duration::from_secs(30),
+        }
     }
 }
 
 impl RetryPolicy {
     /// 测试用：快速退避
     pub fn fast() -> Self {
-        Self { max_retries: 5, initial: Duration::from_millis(10), max: Duration::from_millis(50) }
+        Self {
+            max_retries: 5,
+            initial: Duration::from_millis(10),
+            max: Duration::from_millis(50),
+        }
     }
     pub fn backoff(&self, attempt: u32) -> Duration {
         let shift = (attempt - 1).min(30);
@@ -73,10 +81,10 @@ where
 /// worker 的退出原因
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkerExit {
-    Done,     // 我的段（们）全部完成
-    Paused,   // 收到暂停标志
+    Done,   // 我的段（们）全部完成
+    Paused, // 收到暂停标志
     Cancelled,
-    Failed,   // 别的 worker 已把任务置为失败
+    Failed, // 别的 worker 已把任务置为失败
 }
 
 /// 一次 run 的终态
@@ -120,7 +128,13 @@ impl Shared {
     }
 
     fn segment(&self, index: usize) -> Segment {
-        self.segments.lock().unwrap().iter().find(|s| s.index == index).cloned().expect("分片存在")
+        self.segments
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.index == index)
+            .cloned()
+            .expect("分片存在")
     }
 
     /// 更新某分片进度并重算总进度。
@@ -169,7 +183,11 @@ impl Shared {
             .lock()
             .unwrap()
             .iter()
-            .map(|s| SegmentProgress { index: s.index, downloaded: s.downloaded, len: s.len() })
+            .map(|s| SegmentProgress {
+                index: s.index,
+                downloaded: s.downloaded,
+                len: s.len(),
+            })
             .collect()
     }
 
@@ -253,7 +271,11 @@ impl Engine for HttpEngine {
             self.registry.clone(),
         ));
         self.registry.lock().unwrap().insert(id.clone(), join);
-        Ok(TaskHandle { id, progress: progress_rx, control: control_tx })
+        Ok(TaskHandle {
+            id,
+            progress: progress_rx,
+            control: control_tx,
+        })
     }
 
     fn set_speed_limit(&self, limit: Option<u64>) {
@@ -276,7 +298,15 @@ async fn supervise(
     mut control_rx: mpsc::UnboundedReceiver<ControlMsg>,
     registry: Arc<Mutex<HashMap<TaskId, JoinHandle<()>>>>,
 ) {
-    let result = run_download(&client, &spec, &global, &retry, &progress_tx, &mut control_rx).await;
+    let result = run_download(
+        &client,
+        &spec,
+        &global,
+        &retry,
+        &progress_tx,
+        &mut control_rx,
+    )
+    .await;
     let mut snap = progress_tx.subscribe().borrow().clone();
     match result {
         Ok(()) => {
@@ -309,8 +339,12 @@ async fn run_download(
         .map_err(DownloadEnd::Failed)?;
     // I3：文件名的唯一汇聚点——用户覆盖与探测结果（Content-Disposition / URL
     // 末段）都过同一道消毒。下游 ctl/.part/正式文件路径全部由消毒后的名字派生
-    let filename =
-        sanitize_filename(&spec.filename.clone().unwrap_or_else(|| probe.filename.clone()));
+    let filename = sanitize_filename(
+        &spec
+            .filename
+            .clone()
+            .unwrap_or_else(|| probe.filename.clone()),
+    );
     let final_path = spec.save_dir.join(&filename);
     let part_path = part_path_for(&final_path);
     let ctl_path = control_file::path_for(&final_path);
@@ -335,13 +369,24 @@ async fn run_download(
         std::fs::File::create(&part_path)
             .and_then(|f| f.set_len(probe.total))
             .map_err(|e| DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string())))?;
-        let segments = vec![Segment { index: 0, start: 0, end: probe.total - 1, downloaded: 0 }];
+        let segments = vec![Segment {
+            index: 0,
+            start: 0,
+            end: probe.total - 1,
+            downloaded: 0,
+        }];
         let shared = Shared::new(spec.url.clone(), filename.clone(), probe, segments);
         let reporter = spawn_reporter(shared.clone(), progress_tx.clone(), None);
         // sequential_worker 参数保持引用形态（Task 8 签名）；fut 借用局部变量，
         // select! 挂在 &mut fut 上，不需要 'static
         let mut fut = Box::pin(sequential_worker(
-            client, spec, &shared, &part_path, global, &task_throttle, retry,
+            client,
+            spec,
+            &shared,
+            &part_path,
+            global,
+            &task_throttle,
+            retry,
         ));
         let exit = tokio::select! {
             res = &mut fut => res,
@@ -416,8 +461,11 @@ async fn run_download(
                     .map_err(|e| DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string())))?;
             }
         }
-        let mut reporter =
-            spawn_reporter(shared.clone(), progress_tx.clone(), Some(final_path.clone()));
+        let mut reporter = spawn_reporter(
+            shared.clone(),
+            progress_tx.clone(),
+            Some(final_path.clone()),
+        );
         loop {
             let result = drive_download(
                 client.clone(),
@@ -453,8 +501,11 @@ async fn run_download(
                         .map_err(|e| {
                             DownloadEnd::Failed(SparklingError::DiskWrite(e.to_string()))
                         })?;
-                    reporter =
-                        spawn_reporter(shared.clone(), progress_tx.clone(), Some(final_path.clone()));
+                    reporter = spawn_reporter(
+                        shared.clone(),
+                        progress_tx.clone(),
+                        Some(final_path.clone()),
+                    );
                     continue;
                 }
                 Ok(()) => {
@@ -497,8 +548,12 @@ async fn drive_download(
     'batches: loop {
         let batch: Vec<Segment> = {
             let mut g = shared.segments.lock().unwrap();
-            g.sort_by(|a, b| b.remaining().cmp(&a.remaining()));
-            g.iter().filter(|s| s.remaining() > 0).take(initial_workers).cloned().collect()
+            g.sort_by_key(|s| std::cmp::Reverse(s.remaining()));
+            g.iter()
+                .filter(|s| s.remaining() > 0)
+                .take(initial_workers)
+                .cloned()
+                .collect()
         };
         if batch.is_empty() {
             return Ok(()); // 全部完成
@@ -507,9 +562,15 @@ async fn drive_download(
             .into_iter()
             .map(|seg| {
                 tokio::spawn(segment_worker(
-                    client.clone(), spec.clone(), shared.clone(), seg,
-                    part_path.clone(), Some(final_path.clone()),
-                    global.clone(), task.clone(), retry.clone(),
+                    client.clone(),
+                    spec.clone(),
+                    shared.clone(),
+                    seg,
+                    part_path.clone(),
+                    Some(final_path.clone()),
+                    global.clone(),
+                    task.clone(),
+                    retry.clone(),
                 ))
             })
             .collect();
@@ -645,9 +706,7 @@ fn sanitize_filename(name: &str) -> String {
     // Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9，不含扩展名比较）
     let stem = cleaned.split('.').next().unwrap_or("");
     let upper = stem.to_ascii_uppercase();
-    let reserved = ["CON", "PRN", "AUX", "NUL"]
-        .iter()
-        .any(|r| *r == upper)
+    let reserved = ["CON", "PRN", "AUX", "NUL"].iter().any(|r| *r == upper)
         || (upper.len() == 4
             && (upper.starts_with("COM") || upper.starts_with("LPT"))
             && upper[3..].chars().all(|c| c.is_ascii_digit())
@@ -715,7 +774,9 @@ fn spawn_reporter(
             }
             let speed = window
                 .front()
-                .map(|(t, d)| ((dl.saturating_sub(*d)) as f64 / now.duration_since(*t).as_secs_f64()) as u64)
+                .map(|(t, d)| {
+                    ((dl.saturating_sub(*d)) as f64 / now.duration_since(*t).as_secs_f64()) as u64
+                })
                 .unwrap_or(0);
             if progress_tx
                 .send(ProgressSnapshot {
@@ -776,7 +837,16 @@ async fn sequential_worker(
         };
         attempt = 0;
         let mut seg = shared.segment(0);
-        match write_stream(resp.bytes_stream(), shared, &mut seg, part_path, global, task).await {
+        match write_stream(
+            resp.bytes_stream(),
+            shared,
+            &mut seg,
+            part_path,
+            global,
+            task,
+        )
+        .await
+        {
             StreamOutcome::Eof => return Ok(WorkerExit::Done),
             StreamOutcome::Flag(exit) => return Ok(exit),
             StreamOutcome::Retry(e) => {
@@ -789,7 +859,7 @@ async fn sequential_worker(
                     let waste = shared.downloaded.swap(0, Ordering::Relaxed);
                     let _ = waste;
                     shared.add_progress(0, 0, 0); // 重置分片 downloaded（delta=0）
-                    // 注意：add_progress 的 delta 参数为 0，仅同步分片表
+                                                  // 注意：add_progress 的 delta 参数为 0，仅同步分片表
                 }
                 tokio::time::sleep(retry.backoff(attempt)).await;
             }
@@ -863,7 +933,16 @@ async fn segment_worker(
             }
         };
         attempt = 0;
-        match write_stream(resp.bytes_stream(), &shared, &mut seg, &part_path, &global, &task).await {
+        match write_stream(
+            resp.bytes_stream(),
+            &shared,
+            &mut seg,
+            &part_path,
+            &global,
+            &task,
+        )
+        .await
+        {
             StreamOutcome::Eof => {
                 // 用共享表的最新 end 判断（可能已被偷段收缩，本地副本过期）
                 if shared.segment(seg.index).remaining() == 0 {
@@ -985,13 +1064,22 @@ async fn fetch_range(
     } else if start > 0 {
         req = req.header("Range", format!("bytes={start}-"));
     }
-    let resp = req.send().await.map_err(|e| SparklingError::Network(e.to_string()))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| SparklingError::Network(e.to_string()))?;
     let status = resp.status().as_u16();
     if status == 416 {
-        return Err(SparklingError::HttpStatus { status, detail: "Range 不可满足，将重置分片".into() });
+        return Err(SparklingError::HttpStatus {
+            status,
+            detail: "Range 不可满足，将重置分片".into(),
+        });
     }
     if !(200..300).contains(&status) {
-        return Err(SparklingError::HttpStatus { status, detail: format!("GET 失败: {url}") });
+        return Err(SparklingError::HttpStatus {
+            status,
+            detail: format!("GET 失败: {url}"),
+        });
     }
     Ok(resp)
 }
@@ -1013,15 +1101,17 @@ fn finalize(
     }
     // Content-MD5（若服务器提供）：不匹配则不产出正式文件
     if let Some(expected) = &shared.probe.content_md5 {
-        use md5::{Digest, Md5};
         use base64::Engine as _;
+        use md5::{Digest, Md5};
         let mut h = Md5::new();
-        let mut f = std::fs::File::open(part_path)
-            .map_err(|e| SparklingError::DiskWrite(e.to_string()))?;
+        let mut f =
+            std::fs::File::open(part_path).map_err(|e| SparklingError::DiskWrite(e.to_string()))?;
         let mut buf = vec![0u8; 64 * 1024];
         use std::io::Read;
         loop {
-            let n = f.read(&mut buf).map_err(|e| SparklingError::DiskWrite(e.to_string()))?;
+            let n = f
+                .read(&mut buf)
+                .map_err(|e| SparklingError::DiskWrite(e.to_string()))?;
             if n == 0 {
                 break;
             }

@@ -35,7 +35,11 @@ impl Default for ManagerConfig {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind")]
 pub enum TaskEvent {
-    State { id: TaskId, state: TaskState, error: Option<String> },
+    State {
+        id: TaskId,
+        state: TaskState,
+        error: Option<String>,
+    },
     /// segments：真实分片表（UI 的"棱镜光道"按此渲染，偷段产生的新块实时可见）
     Progress {
         id: TaskId,
@@ -178,7 +182,12 @@ impl TaskManager {
             was
         };
         if was_queued {
-            self.inner.store.lock().unwrap().update_state(id, TaskState::Cancelled, None).ok();
+            self.inner
+                .store
+                .lock()
+                .unwrap()
+                .update_state(id, TaskState::Cancelled, None)
+                .ok();
             self.emit_state(id, TaskState::Cancelled, None);
         }
         Ok(())
@@ -210,7 +219,11 @@ impl TaskManager {
         }
         q.push_back(id.to_string());
         drop(q);
-        self.inner.store.lock().unwrap().update_state(id, TaskState::Queued, None)?;
+        self.inner
+            .store
+            .lock()
+            .unwrap()
+            .update_state(id, TaskState::Queued, None)?;
         self.emit_state(id, TaskState::Queued, None);
         try_schedule(&self.inner);
         Ok(())
@@ -292,11 +305,11 @@ impl TaskManager {
                         Some(Ok(_)) if cfg.auto_resume_on_start => to_resume.push(rec.id.clone()),
                         Some(Ok(_)) => {
                             // 不自动恢复：保持 Paused（无句柄，resume 时重新排队）
-                            self.inner
-                                .store
-                                .lock()
-                                .unwrap()
-                                .update_state(&rec.id, TaskState::Paused, None)?;
+                            self.inner.store.lock().unwrap().update_state(
+                                &rec.id,
+                                TaskState::Paused,
+                                None,
+                            )?;
                             self.emit_state(&rec.id, TaskState::Paused, None);
                         }
                         _ => {
@@ -339,10 +352,11 @@ impl TaskManager {
     }
 
     fn emit_state(&self, id: &str, state: TaskState, error: Option<String>) {
-        let _ = self
-            .inner
-            .events
-            .send(TaskEvent::State { id: id.to_string(), state, error });
+        let _ = self.inner.events.send(TaskEvent::State {
+            id: id.to_string(),
+            state,
+            error,
+        });
     }
 }
 
@@ -365,7 +379,9 @@ fn try_schedule(inner: &Arc<Inner>) {
         }
         let id = inner.queue.lock().unwrap().pop_front();
         let Some(id) = id else { return };
-        let Some(rec) = inner.store.lock().unwrap().get(&id).ok().flatten() else { continue };
+        let Some(rec) = inner.store.lock().unwrap().get(&id).ok().flatten() else {
+            continue;
+        };
         if matches!(rec.state, TaskState::Completed | TaskState::Cancelled) {
             continue;
         }
@@ -383,7 +399,11 @@ fn try_schedule(inner: &Arc<Inner>) {
         inner.runtime.spawn(async move {
             match inner2.engine.submit(spec).await {
                 Ok(handle) => {
-                    inner2.handles.lock().unwrap().insert(id.clone(), handle.clone());
+                    inner2
+                        .handles
+                        .lock()
+                        .unwrap()
+                        .insert(id.clone(), handle.clone());
                     monitor_task(inner2, id, handle).await;
                 }
                 Err(e) => {

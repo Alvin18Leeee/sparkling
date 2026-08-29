@@ -32,7 +32,10 @@ fn truncated_file_is_corrupt() {
     let raw = std::fs::read(&ctl).unwrap();
     std::fs::write(&ctl, &raw[..raw.len() / 2]).unwrap(); // 模拟写一半崩溃
     let err = control_file::load(&ctl).unwrap_err();
-    assert!(matches!(err, sparkling_core::SparklingError::CorruptControlFile(_)));
+    assert!(matches!(
+        err,
+        sparkling_core::SparklingError::CorruptControlFile(_)
+    ));
 }
 
 #[test]
@@ -43,14 +46,20 @@ fn bad_invariant_is_corrupt() {
     cf.segments[0].downloaded = cf.segments[0].len() + 1; // downloaded > len
     control_file::save(&final_path, &cf).unwrap();
     let err = control_file::load(&control_file::path_for(&final_path)).unwrap_err();
-    assert!(matches!(err, sparkling_core::SparklingError::CorruptControlFile(_)));
+    assert!(matches!(
+        err,
+        sparkling_core::SparklingError::CorruptControlFile(_)
+    ));
 }
 
 #[test]
 fn missing_file_is_corrupt() {
     let dir = tempfile::tempdir().unwrap();
     let err = control_file::load(&dir.path().join("nope.sparkling")).unwrap_err();
-    assert!(matches!(err, sparkling_core::SparklingError::CorruptControlFile(_)));
+    assert!(matches!(
+        err,
+        sparkling_core::SparklingError::CorruptControlFile(_)
+    ));
 }
 
 #[test]
@@ -69,10 +78,18 @@ fn inverted_segment_is_corrupt_not_panic() {
     let dir = tempfile::tempdir().unwrap();
     let final_path = dir.path().join("a.bin");
     let mut cf = sample();
-    cf.segments[0] = Segment { index: 0, start: 10, end: 5, downloaded: 0 };
+    cf.segments[0] = Segment {
+        index: 0,
+        start: 10,
+        end: 5,
+        downloaded: 0,
+    };
     control_file::save(&final_path, &cf).unwrap();
     let err = control_file::load(&control_file::path_for(&final_path)).unwrap_err();
-    assert!(matches!(err, sparkling_core::SparklingError::CorruptControlFile(_)));
+    assert!(matches!(
+        err,
+        sparkling_core::SparklingError::CorruptControlFile(_)
+    ));
 }
 
 mod throttle_tests {

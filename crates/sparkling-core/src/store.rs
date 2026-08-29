@@ -64,8 +64,17 @@ impl TaskStore {
                                     total_size, downloaded, error, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
-                    r.id, r.url, r.state.as_str(), r.save_dir, r.filename, r.segments,
-                    r.max_speed, r.total_size, r.downloaded, r.error, r.created_at
+                    r.id,
+                    r.url,
+                    r.state.as_str(),
+                    r.save_dir,
+                    r.filename,
+                    r.segments,
+                    r.max_speed,
+                    r.total_size,
+                    r.downloaded,
+                    r.error,
+                    r.created_at
                 ],
             )
             .map_err(|e| SparklingError::Other(format!("插入失败: {e}")))?;
@@ -76,7 +85,7 @@ impl TaskStore {
         Ok(TaskRecord {
             id: row.get(0)?,
             url: row.get(1)?,
-            state: TaskState::from_str(&row.get::<_, String>(2)?).unwrap_or(TaskState::Failed),
+            state: TaskState::parse(&row.get::<_, String>(2)?).unwrap_or(TaskState::Failed),
             save_dir: row.get(3)?,
             filename: row.get(4)?,
             segments: row.get::<_, u32>(5)?,
@@ -90,7 +99,11 @@ impl TaskStore {
 
     pub fn get(&self, id: &str) -> Result<Option<TaskRecord>> {
         self.conn
-            .query_row("SELECT * FROM tasks WHERE id = ?1", params![id], Self::row_to_record)
+            .query_row(
+                "SELECT * FROM tasks WHERE id = ?1",
+                params![id],
+                Self::row_to_record,
+            )
             .optional()
             .map_err(|e| SparklingError::Other(format!("查询失败: {e}")))
     }
@@ -177,7 +190,10 @@ mod tests {
         store.insert(&rec("t2")).unwrap();
         let all = store.get_all().unwrap();
         assert_eq!(all.len(), 2);
-        assert_eq!(store.get("t1").unwrap().unwrap().url, "http://example.com/a.bin");
+        assert_eq!(
+            store.get("t1").unwrap().unwrap().url,
+            "http://example.com/a.bin"
+        );
         assert!(store.get("missing").unwrap().is_none());
     }
 
@@ -185,7 +201,9 @@ mod tests {
     fn update_state_and_progress() {
         let store = TaskStore::open_in_memory().unwrap();
         store.insert(&rec("t1")).unwrap();
-        store.update_state("t1", TaskState::Failed, Some("网络错误")).unwrap();
+        store
+            .update_state("t1", TaskState::Failed, Some("网络错误"))
+            .unwrap();
         store.update_progress("t1", 12345, 67890).unwrap();
         let r = store.get("t1").unwrap().unwrap();
         assert_eq!(r.state, TaskState::Failed);

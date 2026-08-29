@@ -19,7 +19,11 @@ fn spec(url: String, dir: &tempfile::TempDir, max_speed: Option<u64>) -> TaskSpe
 
 #[tokio::test]
 async fn pause_resume_completes() {
-    let server = start(ServerConfig { size: 4 * 1024 * 1024, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        size: 4 * 1024 * 1024,
+        ..Default::default()
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = HttpEngine::new(None);
     let handle = engine
@@ -48,7 +52,11 @@ async fn pause_resume_completes() {
 
 #[tokio::test]
 async fn crash_recovery_resumes_from_offset() {
-    let server = start(ServerConfig { size: 2 * 1024 * 1024, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        size: 2 * 1024 * 1024,
+        ..Default::default()
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     {
         let engine = HttpEngine::new(None);
@@ -66,7 +74,10 @@ async fn crash_recovery_resumes_from_offset() {
     assert!(done_before >= 300_000, "控制文件应记录已下载量");
 
     let engine2 = HttpEngine::new(None);
-    let handle2 = engine2.submit(spec(server.url.clone(), &dir, None)).await.unwrap();
+    let handle2 = engine2
+        .submit(spec(server.url.clone(), &dir, None))
+        .await
+        .unwrap();
     let mut rx2 = handle2.subscribe();
     let done = wait_state(&mut rx2, TaskState::Completed, Duration::from_secs(60)).await;
     // 关键：恢复后 downloaded 计数从断点累计到全量
@@ -77,7 +88,11 @@ async fn crash_recovery_resumes_from_offset() {
 
 #[tokio::test]
 async fn etag_change_restarts_from_zero() {
-    let server = start(ServerConfig { size: 1024 * 1024, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        size: 1024 * 1024,
+        ..Default::default()
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = HttpEngine::new(None);
     let handle = engine
@@ -87,7 +102,9 @@ async fn etag_change_restarts_from_zero() {
     let mut rx = handle.subscribe();
     wait_until(&mut rx, |s| s.downloaded > 150_000, Duration::from_secs(10)).await;
     handle.pause().unwrap();
-    let paused_at = wait_state(&mut rx, TaskState::Paused, Duration::from_secs(10)).await.downloaded;
+    let paused_at = wait_state(&mut rx, TaskState::Paused, Duration::from_secs(10))
+        .await
+        .downloaded;
 
     server.set_content_v2(); // 远端文件变化（内容 + ETag）
     handle.resume().unwrap();
@@ -108,7 +125,10 @@ async fn etag_change_restarts_from_zero() {
         if tokio::time::Instant::now() >= deadline {
             panic!("等待完成超时");
         }
-        if tokio::time::timeout_at(deadline, rx.changed()).await.is_err() {
+        if tokio::time::timeout_at(deadline, rx.changed())
+            .await
+            .is_err()
+        {
             panic!("等待完成超时（通道关闭）");
         }
     }
@@ -119,7 +139,11 @@ async fn etag_change_restarts_from_zero() {
 
 #[tokio::test]
 async fn cancel_cleans_up_files() {
-    let server = start(ServerConfig { size: 2 * 1024 * 1024, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        size: 2 * 1024 * 1024,
+        ..Default::default()
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = HttpEngine::new(None);
     let handle = engine
@@ -137,14 +161,21 @@ async fn cancel_cleans_up_files() {
 
 #[tokio::test]
 async fn corrupt_control_file_restarts_cleanly() {
-    let server = start(ServerConfig { size: 512 * 1024, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        size: 512 * 1024,
+        ..Default::default()
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     // 预置损坏控制文件与脏 .part
     std::fs::write(dir.path().join("file.bin.sparkling"), b"{ not json !!!").unwrap();
     std::fs::write(dir.path().join("file.bin.sparkling.part"), b"garbage").unwrap();
 
     let engine = HttpEngine::new(None);
-    let handle = engine.submit(spec(server.url.clone(), &dir, None)).await.unwrap();
+    let handle = engine
+        .submit(spec(server.url.clone(), &dir, None))
+        .await
+        .unwrap();
     let mut rx = handle.subscribe();
     wait_state(&mut rx, TaskState::Completed, Duration::from_secs(30)).await;
     let file = std::fs::read(dir.path().join("file.bin")).unwrap();

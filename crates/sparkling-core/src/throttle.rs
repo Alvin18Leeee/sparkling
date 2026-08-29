@@ -18,8 +18,18 @@ impl TokenBucket {
     pub fn new(rate: Option<u64>) -> Self {
         let rate = rate.unwrap_or(0);
         // 初始给满 1 秒配额，起步不被卡
-        let tokens = if rate == 0 { f64::INFINITY } else { rate as f64 };
-        Self { inner: Mutex::new(Inner { rate, tokens, last: Instant::now() }) }
+        let tokens = if rate == 0 {
+            f64::INFINITY
+        } else {
+            rate as f64
+        };
+        Self {
+            inner: Mutex::new(Inner {
+                rate,
+                tokens,
+                last: Instant::now(),
+            }),
+        }
     }
 
     pub fn set_rate(&self, rate: Option<u64>) {

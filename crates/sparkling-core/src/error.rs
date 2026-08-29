@@ -52,14 +52,20 @@ mod tests {
 
     #[test]
     fn user_message_is_chinese_and_readable() {
-        let e = SparklingError::InsufficientDisk { required: 1000, available: 500 };
+        let e = SparklingError::InsufficientDisk {
+            required: 1000,
+            available: 500,
+        };
         assert!(e.user_message().contains("磁盘空间不足"));
         assert!(e.user_message().contains("1000"));
     }
 
     #[test]
     fn technical_keeps_debug_detail() {
-        let e = SparklingError::HttpStatus { status: 503, detail: "unavailable".into() };
+        let e = SparklingError::HttpStatus {
+            status: 503,
+            detail: "unavailable".into(),
+        };
         assert!(e.technical().contains("503"));
         assert!(e.technical().contains("HttpStatus"));
     }
@@ -68,7 +74,10 @@ mod tests {
     fn remote_changed_and_checksum_have_distinct_messages() {
         let e = SparklingError::RemoteChanged("etag".into());
         assert!(e.user_message().contains("已变化"));
-        let e = SparklingError::ChecksumMismatch { expected: "a".into(), actual: "b".into() };
+        let e = SparklingError::ChecksumMismatch {
+            expected: "a".into(),
+            actual: "b".into(),
+        };
         assert!(e.user_message().contains("校验"));
     }
 }

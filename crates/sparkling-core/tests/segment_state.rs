@@ -54,7 +54,12 @@ fn split_huge() {
 
 #[test]
 fn take_over_splits_remaining_in_half() {
-    let mut seg = Segment { index: 0, start: 0, end: 99, downloaded: 10 };
+    let mut seg = Segment {
+        index: 0,
+        start: 0,
+        end: 99,
+        downloaded: 10,
+    };
     // 剩余 [10,99] 共 90 字节，右半 [55,99]
     let stolen = take_over(&mut seg, 8).unwrap();
     assert_eq!(stolen.index, 8);
@@ -70,8 +75,18 @@ fn take_over_splits_remaining_in_half() {
 #[test]
 fn take_over_refuses_tiny_remaining() {
     // end=10 含端点 → len=11：downloaded=11 即剩余 0，downloaded=10 即剩余 1
-    let mut seg = Segment { index: 0, start: 0, end: 10, downloaded: 11 }; // 剩余 0
+    let mut seg = Segment {
+        index: 0,
+        start: 0,
+        end: 10,
+        downloaded: 11,
+    }; // 剩余 0
     assert!(take_over(&mut seg, 1).is_none());
-    let mut seg = Segment { index: 0, start: 0, end: 10, downloaded: 10 }; // 剩余 1
+    let mut seg = Segment {
+        index: 0,
+        start: 0,
+        end: 10,
+        downloaded: 10,
+    }; // 剩余 1
     assert!(take_over(&mut seg, 1).is_none());
 }

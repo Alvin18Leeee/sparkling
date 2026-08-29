@@ -9,7 +9,11 @@ fn client() -> reqwest::Client {
 
 #[tokio::test]
 async fn probe_range_server() {
-    let server = start(ServerConfig { size: 5000, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        size: 5000,
+        ..Default::default()
+    })
+    .await;
     let p = probe(&client(), &server.url).await.unwrap();
     assert_eq!(p.total, 5000);
     assert!(p.supports_range);
@@ -19,7 +23,12 @@ async fn probe_range_server() {
 
 #[tokio::test]
 async fn probe_no_range_server() {
-    let server = start(ServerConfig { size: 5000, support_range: false, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        size: 5000,
+        support_range: false,
+        ..Default::default()
+    })
+    .await;
     let p = probe(&client(), &server.url).await.unwrap();
     assert_eq!(p.total, 5000);
     assert!(!p.supports_range);
@@ -36,21 +45,33 @@ async fn probe_disposition_overrides_filename() {
         size: 100,
         disposition: Some("report-q4.zip".into()),
         ..Default::default()
-    }).await;
+    })
+    .await;
     let p = probe(&client(), &server.url).await.unwrap();
     assert_eq!(p.filename, "report-q4.zip");
 }
 
 #[tokio::test]
 async fn probe_http_error() {
-    let server = start(ServerConfig { fail_mode: FailMode::Always5xx, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        fail_mode: FailMode::Always5xx,
+        ..Default::default()
+    })
+    .await;
     let err = probe(&client(), &server.url).await.unwrap_err();
-    assert!(matches!(err, sparkling_core::SparklingError::HttpStatus { status: 500, .. }));
+    assert!(matches!(
+        err,
+        sparkling_core::SparklingError::HttpStatus { status: 500, .. }
+    ));
 }
 
 #[tokio::test]
 async fn probe_content_md5_present() {
-    let server = start(ServerConfig { size: 100, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        size: 100,
+        ..Default::default()
+    })
+    .await;
     let p = probe(&client(), &server.url).await.unwrap();
     assert!(p.content_md5.is_some());
 }
@@ -81,7 +102,8 @@ mod engine_tests {
             size: 256 * 1024,
             support_range: false,
             ..Default::default()
-        }).await;
+        })
+        .await;
         let dir = tempfile::tempdir().unwrap();
         let e = engine().await;
         let handle = e.submit(spec(server.url.clone(), &dir)).await.unwrap();
@@ -97,7 +119,11 @@ mod engine_tests {
 
     #[tokio::test]
     async fn empty_file_completes_immediately() {
-        let server = start(ServerConfig { size: 0, ..Default::default() }).await;
+        let server = start(ServerConfig {
+            size: 0,
+            ..Default::default()
+        })
+        .await;
         let dir = tempfile::tempdir().unwrap();
         let e = engine().await;
         let handle = e.submit(spec(server.url.clone(), &dir)).await.unwrap();
@@ -119,7 +145,8 @@ mod engine_tests {
             support_range: false,
             disposition: Some("report q4.zip".into()),
             ..Default::default()
-        }).await;
+        })
+        .await;
         let dir = tempfile::tempdir().unwrap();
         let e = engine().await;
         let handle = e.submit(spec(server.url.clone(), &dir)).await.unwrap();
@@ -131,7 +158,12 @@ mod engine_tests {
     #[tokio::test]
     async fn user_filename_overrides() {
         // support_range: false —— 同上，多线程分支在 Task 9 前是刻意桩
-        let server = start(ServerConfig { size: 100, support_range: false, ..Default::default() }).await;
+        let server = start(ServerConfig {
+            size: 100,
+            support_range: false,
+            ..Default::default()
+        })
+        .await;
         let dir = tempfile::tempdir().unwrap();
         let e = engine().await;
         let mut s = spec(server.url.clone(), &dir);
@@ -147,7 +179,12 @@ mod engine_tests {
         // I3 回归：用户提供的文件名携带 ..\..\ 穿越 → 消毒后只余最后分量，
         // 文件必须落在 save_dir 之内（消毒点在 run_download 的文件名汇聚处，
         // 用户覆盖与探测结果过同一关卡；ctl/.part 路径同由消毒名派生）
-        let server = start(ServerConfig { size: 100, support_range: false, ..Default::default() }).await;
+        let server = start(ServerConfig {
+            size: 100,
+            support_range: false,
+            ..Default::default()
+        })
+        .await;
         let dir = tempfile::tempdir().unwrap();
         let e = engine().await;
         let mut s = spec(server.url.clone(), &dir);
@@ -155,7 +192,10 @@ mod engine_tests {
         let handle = e.submit(s).await.unwrap();
         let mut rx = handle.subscribe();
         wait_state(&mut rx, TaskState::Completed, Duration::from_secs(10)).await;
-        assert!(dir.path().join("evil.exe").exists(), "应落盘为 save_dir 内的 evil.exe");
+        assert!(
+            dir.path().join("evil.exe").exists(),
+            "应落盘为 save_dir 内的 evil.exe"
+        );
         // 穿越目标（save_dir 上两级）不得出现文件
         assert!(!dir.path().join("..").join("..").join("evil.exe").exists());
         // save_dir 内除正式产物外无残留临时文件
@@ -165,7 +205,11 @@ mod engine_tests {
 
     #[tokio::test]
     async fn probe_error_fails_task() {
-        let server = start(ServerConfig { fail_mode: FailMode::Always5xx, ..Default::default() }).await;
+        let server = start(ServerConfig {
+            fail_mode: FailMode::Always5xx,
+            ..Default::default()
+        })
+        .await;
         let dir = tempfile::tempdir().unwrap();
         // Task 12 起探测复用任务重试策略：默认策略的退避全程 31s，
         // 超出本测试 10s 等待窗口——改用 fast 策略，断言意图不变
@@ -194,7 +238,10 @@ mod disk_tests {
     fn insufficient_space_detected() {
         let dir = tempfile::tempdir().unwrap();
         let err = check_space(dir.path(), u64::MAX / 2).unwrap_err();
-        assert!(matches!(err, sparkling_core::SparklingError::InsufficientDisk { .. }));
+        assert!(matches!(
+            err,
+            sparkling_core::SparklingError::InsufficientDisk { .. }
+        ));
     }
 
     #[test]

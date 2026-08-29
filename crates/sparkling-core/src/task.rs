@@ -25,7 +25,7 @@ impl TaskState {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
             "queued" => TaskState::Queued,
             "running" => TaskState::Running,
@@ -43,11 +43,20 @@ impl TaskState {
     /// Failed→Queued(手动重试)/Cancelled；Completed/Cancelled 为终态。
     pub fn can_transition_to(self, next: TaskState) -> bool {
         use TaskState::*;
-        matches!((self, next),
-            (Queued, Running) | (Queued, Cancelled)
-            | (Running, Paused) | (Running, Completed) | (Running, Failed) | (Running, Cancelled)
-            | (Paused, Queued) | (Paused, Cancelled) | (Paused, Failed)
-            | (Failed, Queued) | (Failed, Cancelled))
+        matches!(
+            (self, next),
+            (Queued, Running)
+                | (Queued, Cancelled)
+                | (Running, Paused)
+                | (Running, Completed)
+                | (Running, Failed)
+                | (Running, Cancelled)
+                | (Paused, Queued)
+                | (Paused, Cancelled)
+                | (Paused, Failed)
+                | (Failed, Queued)
+                | (Failed, Cancelled)
+        )
     }
 }
 
@@ -72,10 +81,17 @@ mod tests {
     fn legal_transitions() {
         use TaskState::*;
         let legal = [
-            (Queued, Running), (Queued, Cancelled),
-            (Running, Paused), (Running, Completed), (Running, Failed), (Running, Cancelled),
-            (Paused, Queued), (Paused, Cancelled), (Paused, Failed),
-            (Failed, Queued), (Failed, Cancelled),
+            (Queued, Running),
+            (Queued, Cancelled),
+            (Running, Paused),
+            (Running, Completed),
+            (Running, Failed),
+            (Running, Cancelled),
+            (Paused, Queued),
+            (Paused, Cancelled),
+            (Paused, Failed),
+            (Failed, Queued),
+            (Failed, Cancelled),
         ];
         for (from, to) in legal {
             assert!(from.can_transition_to(to), "{from:?} -> {to:?} 应合法");
@@ -86,10 +102,16 @@ mod tests {
     fn illegal_transitions() {
         use TaskState::*;
         let illegal = [
-            (Completed, Running), (Completed, Queued), (Completed, Failed),
-            (Cancelled, Running), (Cancelled, Queued),
-            (Queued, Completed), (Queued, Failed), (Queued, Paused),
-            (Failed, Running), (Failed, Completed),
+            (Completed, Running),
+            (Completed, Queued),
+            (Completed, Failed),
+            (Cancelled, Running),
+            (Cancelled, Queued),
+            (Queued, Completed),
+            (Queued, Failed),
+            (Queued, Paused),
+            (Failed, Running),
+            (Failed, Completed),
         ];
         for (from, to) in illegal {
             assert!(!from.can_transition_to(to), "{from:?} -> {to:?} 应非法");
@@ -98,10 +120,16 @@ mod tests {
 
     #[test]
     fn str_roundtrip() {
-        for s in [TaskState::Queued, TaskState::Running, TaskState::Paused,
-                  TaskState::Completed, TaskState::Failed, TaskState::Cancelled] {
-            assert_eq!(TaskState::from_str(s.as_str()), Some(s));
+        for s in [
+            TaskState::Queued,
+            TaskState::Running,
+            TaskState::Paused,
+            TaskState::Completed,
+            TaskState::Failed,
+            TaskState::Cancelled,
+        ] {
+            assert_eq!(TaskState::parse(s.as_str()), Some(s));
         }
-        assert_eq!(TaskState::from_str("bogus"), None);
+        assert_eq!(TaskState::parse("bogus"), None);
     }
 }

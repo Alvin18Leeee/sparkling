@@ -1,5 +1,5 @@
-use crate::{Result, SparklingError};
 use crate::segment::Segment;
+use crate::{Result, SparklingError};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

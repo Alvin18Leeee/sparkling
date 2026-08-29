@@ -74,7 +74,13 @@ pub struct TestServer {
 /// 内容 v1：字节 = i % 251；v2：字节 = (i * 7 + 3) % 241（保证不同）
 fn content(size: u64, v2: bool) -> Vec<u8> {
     (0..size)
-        .map(|i| if v2 { ((i * 7 + 3) % 241) as u8 } else { (i % 251) as u8 })
+        .map(|i| {
+            if v2 {
+                ((i * 7 + 3) % 241) as u8
+            } else {
+                (i % 251) as u8
+            }
+        })
         .collect()
 }
 
@@ -179,7 +185,8 @@ async fn handler(State(st): State<Arc<ServerState>>, req_headers: HeaderMap) -> 
             let remaining = limit.saturating_sub(sent);
             if remaining == 0 {
                 bounded.push(Err(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe, "dropped",
+                    std::io::ErrorKind::BrokenPipe,
+                    "dropped",
                 )));
                 break;
             }
@@ -189,7 +196,8 @@ async fn handler(State(st): State<Arc<ServerState>>, req_headers: HeaderMap) -> 
         }
         if sent >= limit {
             bounded.push(Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe, "dropped",
+                std::io::ErrorKind::BrokenPipe,
+                "dropped",
             )));
         }
         bounded
@@ -255,46 +263,6 @@ impl TestServer {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn server_serves_range_and_full() {
-        let server = start(ServerConfig { size: 10_000, ..Default::default() }).await;
-        let client = reqwest::Client::new();
-        // 全量
-        let full = client.get(&server.url).send().await.unwrap();
-        assert_eq!(full.status(), 200);
-        assert_eq!(full.bytes().await.unwrap().len(), 10_000);
-        // Range（reqwest 手动加头）
-        let part = client
-            .get(&server.url)
-            .header("Range", "bytes=100-199")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(part.status(), 206);
-        assert_eq!(part.headers()["content-range"], "bytes 100-199/10000");
-        assert_eq!(part.bytes().await.unwrap().len(), 100);
-        assert_eq!(server.data.len(), 10_000);
-    }
-
-    #[tokio::test]
-    async fn server_serves_empty_file() {
-        // 空文件不 panic：Range 探测也回 200 空 body（Task 8 空文件测试依赖）
-        let server = start(ServerConfig { size: 0, ..Default::default() }).await;
-        let resp = reqwest::Client::new()
-            .get(&server.url)
-            .header("Range", "bytes=0-0")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), 200);
-        assert_eq!(resp.bytes().await.unwrap().len(), 0);
-    }
-}
-
 use sparkling_core::engine::ProgressSnapshot;
 use sparkling_core::task::TaskState;
 use tokio::sync::watch;
@@ -312,14 +280,19 @@ pub async fn wait_state(
             if cur.state == want {
                 return cur;
             }
-            if !cur.error.is_none() && want != TaskState::Failed {
-                panic!("任务提前失败: {}", cur.error.unwrap());
+            if want != TaskState::Failed {
+                if let Some(err) = &cur.error {
+                    panic!("任务提前失败: {err}");
+                }
             }
         }
         if tokio::time::Instant::now() >= deadline {
             panic!("等待状态 {want:?} 超时");
         }
-        if tokio::time::timeout_at(deadline, rx.changed()).await.is_err() {
+        if tokio::time::timeout_at(deadline, rx.changed())
+            .await
+            .is_err()
+        {
             panic!("等待状态 {want:?} 超时（通道关闭）");
         }
     }
@@ -342,7 +315,10 @@ pub async fn wait_until(
         if tokio::time::Instant::now() >= deadline {
             panic!("wait_until 超时");
         }
-        if tokio::time::timeout_at(deadline, rx.changed()).await.is_err() {
+        if tokio::time::timeout_at(deadline, rx.changed())
+            .await
+            .is_err()
+        {
             panic!("wait_until 超时（通道关闭）");
         }
     }
@@ -386,5 +362,53 @@ pub async fn poll_until<T>(timeout: std::time::Duration, mut f: impl FnMut() -> 
             panic!("poll_until 超时");
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn server_serves_range_and_full() {
+        let server = start(ServerConfig {
+            size: 10_000,
+            ..Default::default()
+        })
+        .await;
+        let client = reqwest::Client::new();
+        // 全量
+        let full = client.get(&server.url).send().await.unwrap();
+        assert_eq!(full.status(), 200);
+        assert_eq!(full.bytes().await.unwrap().len(), 10_000);
+        // Range（reqwest 手动加头）
+        let part = client
+            .get(&server.url)
+            .header("Range", "bytes=100-199")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(part.status(), 206);
+        assert_eq!(part.headers()["content-range"], "bytes 100-199/10000");
+        assert_eq!(part.bytes().await.unwrap().len(), 100);
+        assert_eq!(server.data.len(), 10_000);
+    }
+
+    #[tokio::test]
+    async fn server_serves_empty_file() {
+        // 空文件不 panic：Range 探测也回 200 空 body（Task 8 空文件测试依赖）
+        let server = start(ServerConfig {
+            size: 0,
+            ..Default::default()
+        })
+        .await;
+        let resp = reqwest::Client::new()
+            .get(&server.url)
+            .header("Range", "bytes=0-0")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.bytes().await.unwrap().len(), 0);
     }
 }

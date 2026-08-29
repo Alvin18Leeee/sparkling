@@ -36,7 +36,8 @@ async fn probe_retries_transient_5xx() {
         size: 256 * 1024,
         fail_mode: FailMode::FailFirstN(3),
         ..Default::default()
-    }).await;
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = fast_engine();
     let handle = engine.submit(spec(server.url.clone(), &dir)).await.unwrap();
@@ -48,7 +49,11 @@ async fn probe_retries_transient_5xx() {
 
 #[tokio::test]
 async fn persistent_5xx_fails_task() {
-    let server = start(ServerConfig { fail_mode: FailMode::Always5xx, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        fail_mode: FailMode::Always5xx,
+        ..Default::default()
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = fast_engine();
     let handle = engine.submit(spec(server.url.clone(), &dir)).await.unwrap();
@@ -68,7 +73,8 @@ async fn connection_drop_resumes_from_offset() {
         size: 2 * 1024 * 1024,
         drop_after: Some(512 * 1024),
         ..Default::default()
-    }).await;
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = fast_engine();
     let mut s = spec(server.url.clone(), &dir);
@@ -95,7 +101,8 @@ async fn no_range_drop_restarts_from_zero() {
         drop_after: Some(512 * 1024),
         drop_first_n: 2,
         ..Default::default()
-    }).await;
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = fast_engine();
     let handle = engine.submit(spec(server.url.clone(), &dir)).await.unwrap();
@@ -108,7 +115,11 @@ async fn no_range_drop_restarts_from_zero() {
 #[tokio::test]
 async fn server_416_falls_back_to_plain_get() {
     // 对 Range 一律 416 的服务器：探测退回 plain GET → 顺序下载完成
-    let server = start(ServerConfig { fail_mode: FailMode::Always416, ..Default::default() }).await;
+    let server = start(ServerConfig {
+        fail_mode: FailMode::Always416,
+        ..Default::default()
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = fast_engine();
     let handle = engine.submit(spec(server.url.clone(), &dir)).await.unwrap();
@@ -124,7 +135,8 @@ async fn wrong_md5_fails_without_producing_file() {
         size: 256 * 1024,
         fail_mode: FailMode::WrongMd5,
         ..Default::default()
-    }).await;
+    })
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let engine = fast_engine();
     let handle = engine.submit(spec(server.url.clone(), &dir)).await.unwrap();
