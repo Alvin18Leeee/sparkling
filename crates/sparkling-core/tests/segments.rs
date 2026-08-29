@@ -73,10 +73,12 @@ async fn control_file_persisted_while_running() {
 
 #[tokio::test]
 async fn stealing_eliminates_tail() {
-    // 前半段起始的请求被延迟 400ms：先完成的 worker 应从慢段偷走剩余部分
+    // 前半段起始的请求被延迟：先完成的 worker 应从慢段偷走剩余部分。
+    // 延迟取 1500ms —— CI 共享 runner 调度抖动大，400ms 反差曾使快段 worker
+    // 与慢段同时就绪导致偷段不发生（同代码本机绿、CI 偶发红的 flaky）
     let server = start(ServerConfig {
         size: 2 * 1024 * 1024,
-        slow_first_half: Some(Duration::from_millis(400)),
+        slow_first_half: Some(Duration::from_millis(1500)),
         ..Default::default()
     })
     .await;
