@@ -86,6 +86,39 @@ fn update_config(state: State<AppState>, cfg: ManagerConfig) -> Result<(), Strin
     persist_config(&state.config_path, &cfg)
 }
 
+/// Windows 标题栏定制：DWM 把标题栏/边框染成应用主题色（abyss / line），
+/// 清空类图标与窗口小图标使标题栏不显示 icon（标题已在 config 置空）。
+/// 系统按钮（最小化/最大化/关闭）与原生拖拽、双击最大化、Snap Layouts 全部保留。
+#[cfg(target_os = "windows")]
+fn style_title_bar(hwnd: windows_sys::Win32::Foundation::HWND) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetClassLongPtrW, SendMessageW, GCLP_HICON, GCLP_HICONSM, ICON_SMALL, WM_SETICON,
+    };
+    unsafe {
+        // COLORREF 布局为 0x00BBGGRR
+        let caption: u32 = 0x0026_150B; // #0B1526 深海底
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CAPTION_COLOR as u32,
+            &caption as *const _ as *const core::ffi::c_void,
+            4,
+        );
+        let border: u32 = 0x005C_3823; // #23385C line
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR as u32,
+            &border as *const _ as *const core::ffi::c_void,
+            4,
+        );
+        SetClassLongPtrW(hwnd, GCLP_HICON, 0);
+        SetClassLongPtrW(hwnd, GCLP_HICONSM, 0);
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, 0);
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -119,6 +152,15 @@ pub fn run() {
             {
                 let state: State<AppState> = app.state();
                 state.manager.recover().ok();
+            }
+
+            // 标题栏定制（Windows）：染成主题色 + 隐藏图标与标题文字，
+            // 保留系统按钮与原生拖拽/缩放
+            #[cfg(target_os = "windows")]
+            if let Some(win) = app.get_webview_window("main") {
+                if let Ok(hwnd) = win.hwnd() {
+                    style_title_bar(hwnd.0);
+                }
             }
 
             // 事件转发：core broadcast → 前端 listen("task-event")

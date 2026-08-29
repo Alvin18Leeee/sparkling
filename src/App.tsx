@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { api } from './api';
 import type { LiveInfo, ManagerConfig, TaskEvent, TaskRecord } from './types';
 import { fmtBytes } from './types';
 import AddTaskDialog from './components/AddTaskDialog';
 import SettingsModal from './components/SettingsModal';
 import TaskList from './components/TaskList';
-
-const appWindow = getCurrentWindow();
 
 function Spark({ className }: { className?: string }) {
   return (
@@ -18,23 +15,6 @@ function Spark({ className }: { className?: string }) {
         fill="currentColor"
       />
     </svg>
-  );
-}
-
-/** 自绘窗口控制（无边框窗口）：最小化 / 最大化 / 关闭 */
-function WindowControls() {
-  return (
-    <div className="win-controls">
-      <button className="win-btn" aria-label="最小化" onClick={() => appWindow.minimize()}>
-        <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5h10" stroke="currentColor" strokeWidth="1" /></svg>
-      </button>
-      <button className="win-btn" aria-label="最大化" onClick={() => appWindow.toggleMaximize()}>
-        <svg viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1" /></svg>
-      </button>
-      <button className="win-btn win-btn--close" aria-label="关闭" onClick={() => appWindow.close()}>
-        <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" strokeWidth="1" /></svg>
-      </button>
-    </div>
   );
 }
 
@@ -119,7 +99,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="toolbar" data-tauri-drag-region>
+      <header className="toolbar">
         <div className="brand">
           <Spark className="brand__spark" />
           <span className="brand__name">SPARKLING</span>
@@ -138,7 +118,6 @@ export default function App() {
           </button>
           <button className="btn" onClick={() => setShowSettings(true)}>设置</button>
         </div>
-        <WindowControls />
       </header>
       <main>
         <TaskList tasks={tasks} live={live} onChanged={refresh} onAdd={() => setShowAdd(true)} />
