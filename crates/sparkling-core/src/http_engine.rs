@@ -698,7 +698,8 @@ fn part_path_for(final_path: &Path) -> PathBuf {
 
 /// 清洗文件名：剥离路径分隔符/驱动器前缀/点组件与 Windows 保留设备名，
 /// 非法或空时回退 "download"。防止 Content-Disposition / URL 注入路径穿越（I3）。
-fn sanitize_filename(name: &str) -> String {
+/// pub：③期视频标题清洗复用（VideoEngine 上游构造 spec 前统一消毒）。
+pub fn sanitize_filename(name: &str) -> String {
     // 取最后一个路径组件（兼容 \ 与 /）
     let base = name.rsplit(['\\', '/']).next().unwrap_or("").trim();
     // 剥离 Windows 驱动器前缀（形如 "C:"）与残留冒号
