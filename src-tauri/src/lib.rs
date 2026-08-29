@@ -1,7 +1,8 @@
 use sparkling_core::http_engine::HttpEngine;
-use sparkling_core::manager::{AddTaskOptions, ManagerConfig, TaskManager};
+use sparkling_core::manager::{AddTaskOptions, Engines, ManagerConfig, TaskManager};
 use sparkling_core::store::TaskRecord;
 use sparkling_core::task::TaskKind;
+use sparkling_core::video::{TokioChildRunner, VideoEngine, YtDlpRunner};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -198,15 +199,21 @@ pub fn run() {
                 .path()
                 .download_dir()
                 .unwrap_or_else(|_| PathBuf::from("."));
-            let engine: Arc<dyn sparkling_core::engine::Engine> =
-                Arc::new(HttpEngine::new(cfg.global_speed_limit));
+            // ③期视频引擎：yt-dlp 二进制的发现/路径解析、ffmpeg/cookie 接线
+            // 由 Task 9 完善，此处先以 cwd 相对路径占位
+            let video_runner: Arc<dyn YtDlpRunner> = Arc::new(TokioChildRunner {
+                bin: PathBuf::from("yt-dlp.exe"),
+            });
             // C1：命令层是同步 fn，tauri 在 WebView2 COM 回调线程上内联执行
             // （无 ambient runtime）——manager 必须持 Handle 才能从那里 spawn。
             // tauri::async_runtime::handle() 返回自身包装的 RuntimeHandle，
             // inner() 借出内部的 tokio Handle
             let manager = TaskManager::new(
                 &config_dir.join("tasks.db"),
-                engine,
+                Engines {
+                    http: Arc::new(HttpEngine::new(cfg.global_speed_limit)),
+                    video: Arc::new(VideoEngine::new(video_runner, None, None)),
+                },
                 cfg,
                 tauri::async_runtime::handle().inner().clone(),
             )

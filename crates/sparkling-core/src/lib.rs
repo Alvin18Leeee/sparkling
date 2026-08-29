@@ -14,7 +14,7 @@ pub mod video;
 pub use engine::{ControlMsg, Engine, ProgressSnapshot, SegmentProgress, TaskHandle};
 pub use error::{Result, SparklingError};
 pub use http_engine::{HttpEngine, RetryPolicy};
-pub use manager::{AddTaskOptions, ManagerConfig, TaskEvent, TaskManager};
+pub use manager::{AddTaskOptions, Engines, ManagerConfig, TaskEvent, TaskManager};
 pub use probe::{probe, ProbeResult};
 pub use segment::{split, take_over, Segment};
 pub use store::{TaskRecord, TaskStore};
