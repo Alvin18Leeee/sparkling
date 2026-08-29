@@ -57,16 +57,20 @@ impl TaskStore {
             );",
         )
         .map_err(|e| SparklingError::Other(format!("初始化表失败: {e}")))?;
-        // v0→v1：③期视频任务列。user_version 幂等保护（重复打开不重复 ALTER）
+        // v0→v1：③期视频任务列。user_version 幂等保护（重复打开不重复 ALTER）；
+        // 整批包进事务：DDL 与 user_version 均事务性，半途失败整体回滚，
+        // 库不会停在"kind 列已加而 user_version 仍 0"的卡死态
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| SparklingError::Other(format!("读取库版本失败: {e}")))?;
         if version < 1 {
             conn.execute_batch(
-                "ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'http';
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'http';
                  ALTER TABLE tasks ADD COLUMN video_params TEXT;
                  ALTER TABLE tasks ADD COLUMN video_meta TEXT;
-                 PRAGMA user_version = 1;",
+                 PRAGMA user_version = 1;
+                 COMMIT;",
             )
             .map_err(|e| SparklingError::Other(format!("迁移数据库失败: {e}")))?;
         }
