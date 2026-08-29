@@ -104,7 +104,8 @@ fn style_title_bar(hwnd: windows_sys::Win32::Foundation::HWND) {
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateIconIndirect, LoadImageW, SendMessageW, SetClassLongPtrW, GCLP_HICON, GCLP_HICONSM,
-        ICONINFO, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, WM_SETICON,
+        ICONINFO, ICON_BIG, ICON_SMALL, ICON_SMALL2, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED,
+        WM_SETICON,
     };
     unsafe {
         // 大图标（任务栏/Alt+Tab 用）：从 exe 资源加载（tauri-build 以 ID 32512 嵌入 icons/icon.ico）
@@ -118,6 +119,9 @@ fn style_title_bar(hwnd: windows_sys::Win32::Foundation::HWND) {
         );
         if !big.is_null() {
             SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, big as isize);
+            // ICON_SMALL2（DPI 感知小图标）：Explorer 任务栏悬停缩略图优先读它——
+            // 喂星标让缩略图有图标；标题栏画的是 ICON_SMALL（保持透明）
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL2 as usize, big as isize);
         }
         // COLORREF 布局为 0x00BBGGRR
         let chrome: u32 = 0x0035_2210; // #102235 chrome（与工具栏色带一致）
