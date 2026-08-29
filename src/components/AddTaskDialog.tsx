@@ -125,15 +125,20 @@ export default function AddTaskDialog({
         <h2>新建下载</h2>
         {video === 'probing' && <div className="video-panel__loading">正在解析视频信息…</div>}
         {video && video !== 'probing' ? (
-          <VideoInfoPanel
-            info={video.info}
-            ffmpegAvailable={ffmpegAvailable}
-            defaultSubLangs={defaultSubLangs}
-            defaultAutoSubs={defaultAutoSubs}
-            onConfirm={confirmVideo}
-            onCancel={() => setVideo(null)}
-            busy={busy}
-          />
+          <>
+            <VideoInfoPanel
+              info={video.info}
+              ffmpegAvailable={ffmpegAvailable}
+              defaultSubLangs={defaultSubLangs}
+              defaultAutoSubs={defaultAutoSubs}
+              preference={preference}
+              onConfirm={confirmVideo}
+              onCancel={() => setVideo(null)}
+              busy={busy}
+            />
+            {/* 面板态也要展示错误（confirmVideo 批量入队失败时给用户反馈） */}
+            {err && <div className="error">{err}</div>}
+          </>
         ) : (
           <>
             <label>URL</label>
@@ -142,7 +147,7 @@ export default function AddTaskDialog({
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://example.com/file.zip"
-              onKeyDown={(e) => e.key === 'Enter' && submit()}
+              onKeyDown={(e) => e.key === 'Enter' && !busy && submit()}
             />
             {isVideoUrl && (
               <div className="video-hint">

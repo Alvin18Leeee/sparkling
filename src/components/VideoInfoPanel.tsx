@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import type { FormatEntry, PlaylistEntry, VideoInfo } from '../types';
-import { fmtBytes, fmtDuration } from '../types';
+import type { FormatEntry, ManagerConfig, PlaylistEntry, VideoInfo } from '../types';
+import { fmtBytes, fmtDuration, selectorFromPreference } from '../types';
 
 /** 画质档位（UI 选择粒度；selector 是 yt-dlp -f 模板，跨视频稳定） */
 interface QualityOption {
@@ -10,9 +10,10 @@ interface QualityOption {
   needsMerge: boolean;
 }
 
-/** 从格式表聚合可选画质档位（height 降序 + 仅音频），needsMerge 判定看是否存在渐进流 */
+/** 从格式表聚合可选画质档位（height 降序 + 仅音频）。
+ *  needsMerge 标记分离流合并档位（画质档位选择器总是走 bestvideo+bestaudio
+ *  模板），仅用于档位文案——无 ffmpeg 时提示"需 ffmpeg，缺失"。 */
 function qualityOptions(formats: FormatEntry[]): QualityOption[] {
-  const hasProgressive = formats.some((f) => f.vcodec !== 'none' && f.acodec !== 'none');
   const heights = [...new Set(formats.filter((f) => f.height).map((f) => f.height!))]
     .sort((a, b) => b - a)
     .map<QualityOption>((h) => ({
@@ -27,7 +28,7 @@ function qualityOptions(formats: FormatEntry[]): QualityOption[] {
     selector: 'ba/b',
     needsMerge: false,
   };
-  return [...heights, audio].map((o) => ({ ...o, needsMerge: o.needsMerge && !hasProgressive ? true : o.needsMerge }));
+  return [...heights, audio];
 }
 
 export default function VideoInfoPanel({
@@ -35,6 +36,7 @@ export default function VideoInfoPanel({
   ffmpegAvailable,
   defaultSubLangs,
   defaultAutoSubs,
+  preference,
   onConfirm,
   onCancel,
   busy,
@@ -43,6 +45,7 @@ export default function VideoInfoPanel({
   ffmpegAvailable: boolean;
   defaultSubLangs: string;
   defaultAutoSubs: boolean;
+  preference: ManagerConfig | null;
   onConfirm: (c: {
     format: string;
     subtitles: string[];
@@ -63,16 +66,21 @@ export default function VideoInfoPanel({
   );
   const isPlaylist = info.playlist != null && info.playlist.length > 0;
   const selectedOpt = options.find((o) => o.id === quality);
+  // 播放列表：probe 对列表固定不返回 formats（画质档位表恒空），下载格式
+  // 改按用户画质偏好推导，而非 quality 状态（其仅对单视频的格式表有意义）
+  const playlistFormat = selectorFromPreference(preference) ?? 'bv*+ba/b';
 
   const confirm = () => {
     const langs = subLangs.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
     onConfirm({
-      format: selectedOpt?.selector ?? 'bv*+ba/b',
+      format: isPlaylist ? playlistFormat : (selectedOpt?.selector ?? 'bv*+ba/b'),
       subtitles: langs,
       auto_subs: autoSubs,
       entries: isPlaylist ? (info.playlist ?? []).filter((_, i) => selected.has(i)) : null,
-      audioOnly: selectedOpt?.id === 'audio',
-      maxHeight: selectedOpt?.id.startsWith('h') ? Number(selectedOpt.id.slice(1)) : null,
+      audioOnly: isPlaylist ? playlistFormat === 'ba/b' : selectedOpt?.id === 'audio',
+      maxHeight: isPlaylist
+        ? playlistFormat === 'ba/b' ? null : (preference?.video_max_height ?? null)
+        : selectedOpt?.id.startsWith('h') ? Number(selectedOpt.id.slice(1)) : null,
     });
   };
 
@@ -148,7 +156,7 @@ export default function VideoInfoPanel({
       </label>
 
       <div className="modal-actions">
-        <button className="btn" onClick={onCancel}>返回</button>
+        <button className="btn" disabled={busy} onClick={onCancel}>返回</button>
         <button className="btn btn--primary" disabled={busy || (isPlaylist && selected.size === 0)} onClick={confirm}>
           {busy ? '添加中…' : '下载'}
         </button>
