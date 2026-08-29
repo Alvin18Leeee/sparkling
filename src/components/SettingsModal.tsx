@@ -25,6 +25,11 @@ export default function SettingsModal({
       auto_resume_on_start: autoResume,
       global_speed_limit: limitKb > 0 ? limitKb * 1024 : null,
       default_segments: Math.max(1, Math.min(64, defaultSegments)),
+      // 视频偏好本弹窗不编辑——原样回传（config 为 null 时用后端同款默认值）
+      video_max_height: config?.video_max_height ?? null,
+      video_audio_only: config?.video_audio_only ?? false,
+      video_sub_langs: config?.video_sub_langs ?? 'zh-Hans,en',
+      video_auto_subs: config?.video_auto_subs ?? false,
     };
     try {
       await api.updateConfig(cfg);

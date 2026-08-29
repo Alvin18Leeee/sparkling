@@ -62,6 +62,7 @@ export default function App() {
           total: p.total,
           speed: p.speed,
           segments: p.segments,
+          merging: p.merging,
         });
       } else {
         if (p.state !== 'running') {
