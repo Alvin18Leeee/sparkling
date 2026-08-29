@@ -11,6 +11,9 @@ const STATE_META: Record<TaskState, { label: string }> = {
   cancelled: { label: '已取消' },
 };
 
+/** 视频任务 running 期间的阶段标签（替换默认"下载中"） */
+const VIDEO_RUNNING_LABEL: Record<string, string> = { merging: '合并中' };
+
 /** 从 URL 末段取显示名（percent-decode；无可用段时返回 null） */
 function urlName(url: string): string | null {
   try {
@@ -36,20 +39,26 @@ export default function TaskRow({
   const downloaded = live?.downloaded ?? task.downloaded;
   const pct = total > 0 ? Math.min(100, Math.floor((downloaded / total) * 100)) : 0;
   // 探测完成前显示 URL 末段；探测失败的不再永远卡在"解析中"
-  const name = task.filename ?? urlName(task.url) ?? '解析中…';
+  // 视频任务：标题优先；下载完成进入合并阶段时状态标签切换"合并中"
+  const isVideo = task.kind === 'video';
+  const name = isVideo
+    ? (task.video_meta?.title ?? task.filename ?? urlName(task.url) ?? '解析中…')
+    : (task.filename ?? urlName(task.url) ?? '解析中…');
   const running = task.state === 'running';
+  const merging = isVideo && running && (live?.merging ?? false);
+  const stateLabel = merging ? VIDEO_RUNNING_LABEL.merging : STATE_META[task.state].label;
   const act = (fn: (id: string) => Promise<void>) => () => {
     fn(task.id).then(onChanged).catch((e) => alert(String(e)));
   };
 
   return (
-    <div className={`task task--${task.state}`}>
+    <div className={`task task--${task.state}${isVideo ? ' task--video' : ''}`}>
       <div className="task__head">
         <span className="task__name" title={task.url}>{name}</span>
         <span className="task__pct">{pct}%</span>
         <span className="task__state">
           <i className="task__state-dot" aria-hidden="true" />
-          {STATE_META[task.state].label}
+          {stateLabel}
         </span>
       </div>
 

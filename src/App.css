@@ -142,6 +142,8 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 视频任务行显示的是视频标题（元数据），弱一档字重与文件名区分 */
+.task--video .task__name { font-weight: 500; }
 .task__pct {
   font-family: var(--font-data);
   font-size: 12px;
