@@ -54,8 +54,8 @@ export default function SettingsModal({
         </label>
         {err && <div className="error">{err}</div>}
         <div className="modal-actions">
-          <button onClick={onClose}>取消</button>
-          <button className="primary" onClick={save}>保存</button>
+          <button className="btn" onClick={onClose}>取消</button>
+          <button className="btn btn--primary" onClick={save}>保存</button>
         </div>
       </div>
     </div>

@@ -1,67 +1,324 @@
-:root { color-scheme: dark; }
+/* ============================================================
+   Sparkling —— 夜海仪表盘
+   母题：深水之上，字节如光流入。签名元素是"棱镜光道"：
+   每一块都是引擎的真实分片，青→紫光谱即水面焦散。
+   ============================================================ */
+
+:root {
+  color-scheme: dark;
+  --abyss: #0b1526;   /* 深海底（页面底色） */
+  --surface: #12213a; /* 面板 */
+  --raised: #1b2e4e;  /* 悬浮 / 输入底 */
+  --line: #23385c;    /* 描边 */
+  --foam: #e8eef7;    /* 主文字（浪沫白） */
+  --mist: #8fa3c2;    /* 次文字（雾） */
+  --spark: #56ccf2;   /* 闪光青（唯一强调色） */
+  --glint: #4cd9a8;   /* 运行 */
+  --gold: #e8c56a;    /* 暂停 */
+  --ember: #f07b62;   /* 失败 */
+  --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-data: "Cascadia Code", "Consolas", "Menlo", monospace;
+}
+
 * { box-sizing: border-box; }
+
 body {
   margin: 0;
-  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-  background: #14161c;
-  color: #e6e9f0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--foam);
+  background: radial-gradient(130% 55% at 50% -12%, rgba(86, 204, 242, 0.07), transparent 60%), var(--abyss);
+  -webkit-font-smoothing: antialiased;
 }
+
 .app { display: flex; flex-direction: column; height: 100vh; }
+
+/* ── 工具栏：字标 + 总速度读数 + 操作 ─────────────────── */
+
 .toolbar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 12px 20px; background: #1b1e26; border-bottom: 1px solid #2a2e3a;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 13px 22px;
+  border-bottom: 1px solid var(--line);
 }
-.toolbar h1 { font-size: 18px; margin: 0; flex: 1; }
-.toolbar .speed { color: #8b93a7; font-size: 13px; }
-.toolbar .actions { display: flex; gap: 8px; }
-main { flex: 1; overflow-y: auto; padding: 16px 20px; }
 
-button {
-  background: #262a35; color: #e6e9f0; border: 1px solid #333846;
-  border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+.brand { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
+.brand__spark { width: 15px; height: 15px; color: var(--spark); flex: none; }
+.brand__name {
+  font-family: var(--font-data);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--foam);
 }
-button:hover { background: #2f3441; }
-button.primary { background: #3b74f0; border-color: #3b74f0; }
-button.primary:hover { background: #5487f2; }
 
-.empty { color: #6b7386; text-align: center; margin-top: 80px; }
-.task-list { display: flex; flex-direction: column; gap: 12px; max-width: 900px; }
-.task-row {
-  background: #1b1e26; border: 1px solid #2a2e3a; border-radius: 10px;
-  padding: 12px 16px;
+.speed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+  flex: none;
 }
-.row-head { display: flex; align-items: center; gap: 10px; }
-.row-head .name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chip {
-  font-size: 12px; padding: 2px 10px; border-radius: 999px; background: #2a2e3a;
+.speed__label { font-size: 11px; letter-spacing: 0.18em; color: var(--mist); }
+.speed__value {
+  font-family: var(--font-data);
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--foam);
+  font-variant-numeric: tabular-nums;
 }
-.chip.running { background: #123a25; color: #5fd68a; }
-.chip.completed { background: #123055; color: #6db3ff; }
-.chip.failed { background: #45161c; color: #ff7b8a; }
-.chip.paused { background: #453a12; color: #ffc861; }
-.progress { display: flex; align-items: center; gap: 10px; margin: 10px 0 6px; }
-.bar { flex: 1; height: 8px; background: #262a35; border-radius: 4px; overflow: hidden; }
-.fill { height: 100%; background: linear-gradient(90deg, #3b74f0, #6db3ff); transition: width 0.3s; }
-.pct { font-size: 12px; color: #8b93a7; width: 44px; text-align: right; }
-.row-meta { display: flex; gap: 16px; font-size: 12px; color: #8b93a7; }
-.row-meta .error { color: #ff7b8a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.row-actions { display: flex; gap: 8px; margin-top: 10px; }
+.speed__unit { font-size: 13px; font-weight: 400; color: var(--mist); margin-left: 2px; }
+
+.toolbar__actions { display: flex; gap: 8px; flex: none; }
+
+/* ── 按钮 ─────────────────────────────────────────────── */
+
+.btn {
+  font: inherit;
+  font-size: 13px;
+  color: var(--foam);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.btn:hover { background: var(--raised); border-color: #2f4770; }
+.btn:focus-visible { outline: 2px solid var(--spark); outline-offset: 2px; }
+.btn--primary {
+  background: var(--spark);
+  border-color: var(--spark);
+  color: #071626;
+  font-weight: 600;
+}
+.btn--primary:hover { background: #74d8f6; border-color: #74d8f6; }
+.btn--sm { padding: 4px 11px; font-size: 12px; border-radius: 6px; }
+
+/* ── 列表容器 ─────────────────────────────────────────── */
+
+main { flex: 1; overflow-y: auto; padding: 18px 22px 28px; }
+main::-webkit-scrollbar { width: 10px; }
+main::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 5px; }
+main::-webkit-scrollbar-thumb:hover { background: #25406b; }
+
+.task-list { display: flex; flex-direction: column; gap: 12px; max-width: 880px; }
+
+/* ── 任务行 ───────────────────────────────────────────── */
+
+.task {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 13px 16px 12px;
+  animation: rise 0.28s ease-out backwards;
+}
+.task:hover { border-color: #2f4770; }
+
+.task__head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.task__name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task__pct {
+  font-family: var(--font-data);
+  font-size: 13px;
+  color: var(--mist);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.task__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--mist);
+  flex: none;
+}
+.task__state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mist);
+  flex: none;
+}
+.task--running .task__state-dot { background: var(--glint); box-shadow: 0 0 6px var(--glint); }
+.task--running .task__state { color: var(--glint); }
+.task--completed .task__state-dot { background: var(--spark); }
+.task--completed .task__state { color: var(--spark); }
+.task--paused .task__state-dot { background: var(--gold); }
+.task--paused .task__state { color: var(--gold); }
+.task--failed .task__state-dot { background: var(--ember); }
+.task--failed .task__state { color: var(--ember); }
+
+/* ── 棱镜光道（签名元素：真实分片） ──────────────────── */
+
+.task__lane {
+  position: relative;
+  display: flex;
+  gap: 3px;
+  height: 14px;
+  margin: 10px 0 8px;
+}
+.task__block {
+  flex: 1 1 0;
+  min-width: 3px;
+  background: rgba(143, 163, 194, 0.13);
+  border-radius: 2.5px;
+  overflow: hidden;
+}
+.task__block-fill {
+  position: relative;
+  height: 100%;
+  background: var(--mist);
+  border-radius: 2.5px;
+}
+/* 非运行状态的语义色（运行色由内联光谱提供） */
+.task--paused .task__block-fill { background: var(--gold); }
+.task--failed .task__block-fill { background: var(--ember); }
+.task--completed .task__block-fill { background: var(--spark); }
+.task--cancelled .task__block-fill,
+.task--queued .task__block-fill { background: var(--mist); }
+
+/* 运行中：逐块光波扫掠（按块位错开成一道浪） */
+.task--running .task__block-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.38), transparent);
+  transform: translateX(-100%);
+  animation: sheen 2.4s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 0.12s);
+}
+/* 完成：一次掠光横扫整条光道 */
+.task--completed .task__lane::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(100deg, transparent 35%, rgba(232, 238, 247, 0.45) 50%, transparent 65%);
+  transform: translateX(-100%);
+  animation: glint 0.9s ease-out 0.05s 1 forwards;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* ── 数据行（等宽微字距） ─────────────────────────────── */
+
+.task__meta { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.task__stat {
+  font-family: var(--font-data);
+  font-size: 11.5px;
+  color: var(--mist);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.task__stat--speed { color: var(--foam); }
+.task__error {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ember);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task__actions { display: flex; gap: 6px; margin-left: auto; flex: none; }
+
+/* ── 空状态：邀请，不是空墙 ───────────────────────────── */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding-top: 14vh;
+  text-align: center;
+}
+.empty__spark { width: 34px; height: 34px; color: var(--line); margin-bottom: 10px; }
+.empty__title { margin: 0; font-size: 15px; color: var(--foam); }
+.empty__hint { margin: 0 0 18px; font-size: 13px; color: var(--mist); }
+
+/* ── 模态 ─────────────────────────────────────────────── */
 
 .modal-mask {
-  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
-  display: flex; align-items: center; justify-content: center; z-index: 10;
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 10, 20, 0.62);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
 }
 .modal {
-  background: #1b1e26; border: 1px solid #2a2e3a; border-radius: 12px;
-  padding: 20px 24px; width: 460px; max-width: 92vw;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px 24px;
+  width: 460px;
+  max-width: 92vw;
+  box-shadow: 0 18px 50px rgba(2, 6, 14, 0.55);
 }
-.modal h2 { margin: 0 0 14px; font-size: 16px; }
-.modal label { display: block; font-size: 12px; color: #8b93a7; margin: 12px 0 4px; }
+.modal h2 { margin: 0 0 6px; font-size: 15px; }
+.modal label { display: block; font-size: 12px; color: var(--mist); margin: 13px 0 5px; }
 .modal input {
-  width: 100%; background: #14161c; color: #e6e9f0;
-  border: 1px solid #333846; border-radius: 6px; padding: 8px 10px; font-size: 13px;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  background: var(--abyss);
+  color: var(--foam);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 11px;
+  transition: border-color 0.15s ease;
 }
-.modal label.checkbox { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-.modal label.checkbox input { width: auto; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-.error { color: #ff7b8a; font-size: 12px; margin-top: 8px; }
+.modal input:focus { outline: none; border-color: var(--spark); }
+.modal input:focus-visible { outline: 2px solid var(--spark); outline-offset: 1px; }
+.modal label.checkbox { display: flex; align-items: center; gap: 9px; margin-top: 15px; }
+.modal label.checkbox input { width: auto; accent-color: var(--spark); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.error {
+  color: var(--ember);
+  font-size: 12px;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+/* ── 动效 ─────────────────────────────────────────────── */
+
+@keyframes sheen {
+  0% { transform: translateX(-100%); }
+  55%, 100% { transform: translateX(100%); }
+}
+@keyframes glint {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task { animation: none; }
+  .task--running .task__block-fill::after { animation: none; display: none; }
+  .task--completed .task__lane::after { animation: none; display: none; }
+  .btn, .modal input { transition: none; }
+}
+
+/* ── 窄窗（最低 760px，按 560 降级兜底） ───────────────── */
+
+@media (max-width: 640px) {
+  .toolbar { flex-wrap: wrap; gap: 10px 14px; }
+  .brand { flex: none; }
+  .speed { margin-left: auto; }
+  .toolbar__actions { width: 100%; }
+  .toolbar__actions .btn { flex: 1; }
+  .task__pct { display: none; }
+  .task__meta { flex-wrap: wrap; }
+}

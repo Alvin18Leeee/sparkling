@@ -22,9 +22,24 @@ export interface ManagerConfig {
   default_segments: number;
 }
 
+/** 引擎真实分片（光道的一块 = 一个分片） */
+export interface SegmentInfo {
+  index: number;
+  downloaded: number;
+  len: number;
+}
+
 export type TaskEvent =
   | { kind: 'State'; id: string; state: TaskState; error: string | null }
-  | { kind: 'Progress'; id: string; downloaded: number; total: number; speed: number };
+  | { kind: 'Progress'; id: string; downloaded: number; total: number; speed: number; segments: SegmentInfo[] };
+
+/** 进度事件的最新快照（4Hz 直渲，不经 IPC 整表刷新） */
+export interface LiveInfo {
+  downloaded: number;
+  total: number;
+  speed: number;
+  segments: SegmentInfo[];
+}
 
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null) return '—';

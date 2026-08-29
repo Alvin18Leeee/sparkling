@@ -3,7 +3,7 @@ use crate::{Result, SparklingError};
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SegmentProgress {
     pub index: usize,
     pub downloaded: u64,

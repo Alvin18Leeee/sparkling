@@ -1,22 +1,48 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { api } from './api';
-import type { ManagerConfig, TaskEvent, TaskRecord } from './types';
+import type { LiveInfo, ManagerConfig, TaskEvent, TaskRecord } from './types';
 import { fmtBytes } from './types';
 import AddTaskDialog from './components/AddTaskDialog';
 import SettingsModal from './components/SettingsModal';
 import TaskList from './components/TaskList';
 
+function Spark({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M8 0 L9.7 6.3 L16 8 L9.7 9.7 L8 16 L6.3 9.7 L0 8 L6.3 6.3 Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 export default function App() {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [live, setLive] = useState<Map<string, LiveInfo>>(new Map());
   const [config, setConfig] = useState<ManagerConfig | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const speeds = useRef<Map<string, number>>(new Map());
 
   const refresh = useCallback(async () => {
     try {
-      setTasks(await api.listTasks());
+      const recs = await api.listTasks();
+      setTasks(recs);
+      // 对账：清掉已不在列表 / 已非 running 的 live 项（防幻影速度）
+      setLive((prev) => {
+        if (prev.size === 0) return prev;
+        const running = new Set(recs.filter((r) => r.state === 'running').map((r) => r.id));
+        let changed = false;
+        const next = new Map(prev);
+        for (const id of next.keys()) {
+          if (!running.has(id)) {
+            next.delete(id);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     } catch {
       /* 后端未就绪时静默 */
     }
@@ -25,17 +51,31 @@ export default function App() {
   useEffect(() => {
     refresh();
     api.getConfig().then(setConfig).catch(() => {});
-    // 事件驱动更新 + 2s 轮询兜底（防丢事件）
+    // Progress 事件走 live 直渲（4Hz 不再触发整表 IPC）；State 事件即时对账 + 2s 轮询兜底
     const un = listen<TaskEvent>('task-event', (ev) => {
       const p = ev.payload;
       if (p.kind === 'Progress') {
-        speeds.current.set(p.id, p.speed);
-      } else if (p.state !== 'running') {
-        // 暂停/终态的速度不再计入总速度（paused 快照携带旧速度且 reporter 已静默）
-        speeds.current.delete(p.id);
+        setLive((prev) => {
+          const next = new Map(prev);
+          next.set(p.id, {
+            downloaded: p.downloaded,
+            total: p.total,
+            speed: p.speed,
+            segments: p.segments,
+          });
+          return next;
+        });
+      } else {
+        if (p.state !== 'running') {
+          setLive((prev) => {
+            if (!prev.has(p.id)) return prev;
+            const next = new Map(prev);
+            next.delete(p.id);
+            return next;
+          });
+        }
+        refresh();
       }
-      // 状态/进度最终以 list_tasks 为准，事件触发即时刷新
-      refresh();
     });
     const timer = setInterval(refresh, 2000);
     return () => {
@@ -44,20 +84,30 @@ export default function App() {
     };
   }, [refresh]);
 
-  const totalSpeed = [...speeds.current.values()].reduce((a, b) => a + b, 0);
+  const totalSpeed = [...live.values()].reduce((a, b) => a + b.speed, 0);
 
   return (
     <div className="app">
       <header className="toolbar">
-        <h1>✨ Sparkling</h1>
-        <span className="speed">总速度 {fmtBytes(totalSpeed)}/s</span>
-        <div className="actions">
-          <button className="primary" onClick={() => setShowAdd(true)}>＋ 新建下载</button>
-          <button onClick={() => setShowSettings(true)}>设置</button>
+        <div className="brand">
+          <Spark className="brand__spark" />
+          <span className="brand__name">SPARKLING</span>
+        </div>
+        <div className="speed" aria-label="总下载速度">
+          <span className="speed__label">总速度</span>
+          <span className="speed__value">
+            {fmtBytes(totalSpeed)}<span className="speed__unit">/s</span>
+          </span>
+        </div>
+        <div className="toolbar__actions">
+          <button className="btn btn--primary" onClick={() => setShowAdd(true)}>
+            ＋ 新建下载
+          </button>
+          <button className="btn" onClick={() => setShowSettings(true)}>设置</button>
         </div>
       </header>
       <main>
-        <TaskList tasks={tasks} onChanged={refresh} />
+        <TaskList tasks={tasks} live={live} onChanged={refresh} onAdd={() => setShowAdd(true)} />
       </main>
       {showAdd && (
         <AddTaskDialog

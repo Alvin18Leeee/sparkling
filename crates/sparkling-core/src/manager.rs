@@ -36,7 +36,14 @@ impl Default for ManagerConfig {
 #[serde(tag = "kind")]
 pub enum TaskEvent {
     State { id: TaskId, state: TaskState, error: Option<String> },
-    Progress { id: TaskId, downloaded: u64, total: u64, speed: u64 },
+    /// segments：真实分片表（UI 的"棱镜光道"按此渲染，偷段产生的新块实时可见）
+    Progress {
+        id: TaskId,
+        downloaded: u64,
+        total: u64,
+        speed: u64,
+        segments: Vec<crate::engine::SegmentProgress>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -438,6 +445,7 @@ async fn monitor_task(inner: Arc<Inner>, id: TaskId, handle: TaskHandle) {
             downloaded: snap.downloaded,
             total: snap.total,
             speed: snap.speed,
+            segments: snap.segments.clone(),
         });
         if snap.state != prev {
             let was_running = prev == TaskState::Running;

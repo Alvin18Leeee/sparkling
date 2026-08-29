@@ -57,8 +57,8 @@ export default function AddTaskDialog({
         />
         {err && <div className="error">{err}</div>}
         <div className="modal-actions">
-          <button onClick={onClose}>取消</button>
-          <button className="primary" disabled={busy} onClick={submit}>
+          <button className="btn" onClick={onClose}>取消</button>
+          <button className="btn btn--primary" disabled={busy} onClick={submit}>
             {busy ? '添加中…' : '添加'}
           </button>
         </div>
