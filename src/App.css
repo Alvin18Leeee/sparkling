@@ -6,7 +6,8 @@
 
 :root {
   color-scheme: dark;
-  --abyss: #0b1526;   /* 深海底（页面底色） */
+  --abyss: #0b1526;   /* 深海底（内容区底色） */
+  --chrome: #102235;  /* 顶部色带（原生标题栏 + 工具栏同色，DWM 染色一致） */
   --surface: #12213a; /* 面板 */
   --raised: #1b2e4e;  /* 悬浮 / 输入底 */
   --line: #23385c;    /* 描边 */
@@ -28,7 +29,7 @@ body {
   font-family: var(--font-ui);
   font-size: 13px;
   color: var(--foam);
-  background: radial-gradient(130% 55% at 50% -12%, rgba(86, 204, 242, 0.07), transparent 60%), var(--abyss);
+  background: var(--abyss);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -36,11 +37,13 @@ body {
 
 /* ── 工具栏：字标 + 总速度读数 + 操作 ─────────────────── */
 
+/* 工具栏 = chrome 色带（与 DWM 染色的原生标题栏同色无缝衔接） */
 .toolbar {
   display: flex;
   align-items: center;
   gap: 20px;
   padding: 13px 22px;
+  background: var(--chrome);
   border-bottom: 1px solid var(--line);
 }
 
@@ -110,6 +113,8 @@ main {
   overflow-y: auto;
   scrollbar-gutter: stable;
   padding: 18px 12px 28px 22px;
+  /* 水面辉光：从内容区顶部泛起（工具栏改平色色带后辉光下移至此） */
+  background: radial-gradient(130% 55% at 50% -8%, rgba(86, 204, 242, 0.07), transparent 60%), var(--abyss);
 }
 main::-webkit-scrollbar { width: 10px; }
 main::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 5px; }
