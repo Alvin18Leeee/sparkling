@@ -29,8 +29,8 @@ export default function TaskList({
   }
   return (
     <div className="task-list">
-      {tasks.map((t, i) => (
-        <TaskRow key={t.id} task={t} live={live.get(t.id)} index={i} onChanged={onChanged} />
+      {tasks.map((t) => (
+        <TaskRow key={t.id} task={t} live={live.get(t.id)} onChanged={onChanged} />
       ))}
     </div>
   );

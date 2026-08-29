@@ -1,5 +1,5 @@
 import { api } from '../api';
-import type { LiveInfo, SegmentInfo, TaskRecord, TaskState } from '../types';
+import type { LiveInfo, TaskRecord, TaskState } from '../types';
 import { fmtBytes } from '../types';
 
 const STATE_META: Record<TaskState, { label: string }> = {
@@ -11,47 +11,18 @@ const STATE_META: Record<TaskState, { label: string }> = {
   cancelled: { label: '已取消' },
 };
 
-/** 光道最多渲染的块数（引擎偷段可产生超过初始分片数的段，超出按组合并） */
-const MAX_BLOCKS = 32;
-
-function toBlocks(live: LiveInfo | undefined, task: TaskRecord): SegmentInfo[] {
-  if (live && live.segments.length > 0) return live.segments;
-  const total = live?.total ?? task.total_size ?? 0;
-  const dl = live?.downloaded ?? task.downloaded;
-  if (total > 0) return [{ index: 0, downloaded: dl, len: total }];
-  return [];
-}
-
-function capBlocks(segs: SegmentInfo[]): SegmentInfo[] {
-  if (segs.length <= MAX_BLOCKS) return segs;
-  const group = Math.ceil(segs.length / MAX_BLOCKS);
-  const out: SegmentInfo[] = [];
-  for (let i = 0; i < segs.length; i += group) {
-    const chunk = segs.slice(i, i + group);
-    out.push({
-      index: out.length,
-      downloaded: chunk.reduce((a, s) => a + s.downloaded, 0),
-      len: chunk.reduce((a, s) => a + s.len, 0),
-    });
-  }
-  return out;
-}
-
 export default function TaskRow({
   task,
   live,
-  index,
   onChanged,
 }: {
   task: TaskRecord;
   live?: LiveInfo;
-  index: number;
   onChanged: () => void;
 }) {
-  const blocks = capBlocks(toBlocks(live, task));
   const total = live?.total ?? task.total_size ?? 0;
   const downloaded = live?.downloaded ?? task.downloaded;
-  const pct = total > 0 ? Math.floor((downloaded / total) * 100) : 0;
+  const pct = total > 0 ? Math.min(100, Math.floor((downloaded / total) * 100)) : 0;
   const name = task.filename ?? '解析中…';
   const running = task.state === 'running';
   const act = (fn: (id: string) => Promise<void>) => () => {
@@ -59,10 +30,7 @@ export default function TaskRow({
   };
 
   return (
-    <div
-      className={`task task--${task.state}`}
-      style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
-    >
+    <div className={`task task--${task.state}`}>
       <div className="task__head">
         <span className="task__name" title={task.url}>{name}</span>
         <span className="task__pct">{pct}%</span>
@@ -72,24 +40,14 @@ export default function TaskRow({
         </span>
       </div>
 
-      <div className="task__lane" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-        {blocks.map((s, i) => {
-          const fill = s.len > 0 ? Math.min(100, (s.downloaded / s.len) * 100) : 0;
-          // 运行中：沿青→紫光谱按块位取样（水面焦散）；其余状态由 CSS 语义色接管
-          const hue = blocks.length > 1 ? 195 + (i / (blocks.length - 1)) * 70 : 215;
-          return (
-            <div key={s.index} className="task__block" style={{ ['--i' as string]: i }}>
-              <div
-                className="task__block-fill"
-                style={
-                  running
-                    ? { width: `${fill}%`, background: `hsl(${hue} 78% 64%)` }
-                    : { width: `${fill}%` }
-                }
-              />
-            </div>
-          );
-        })}
+      <div
+        className="task__bar"
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
+        <div className="task__bar-fill" style={{ width: `${pct}%` }} />
       </div>
 
       <div className="task__meta">

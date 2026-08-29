@@ -103,7 +103,7 @@ main::-webkit-scrollbar { width: 10px; }
 main::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 5px; }
 main::-webkit-scrollbar-thumb:hover { background: #25406b; }
 
-.task-list { display: flex; flex-direction: column; gap: 12px; max-width: 880px; }
+.task-list { display: flex; flex-direction: column; gap: 12px; }
 
 /* ── 任务行 ───────────────────────────────────────────── */
 
@@ -156,54 +156,49 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
 .task--failed .task__state-dot { background: var(--ember); }
 .task--failed .task__state { color: var(--ember); }
 
-/* ── 棱镜光道（签名元素：真实分片） ──────────────────── */
+/* ── 进度条：连续光带 ─────────────────────────────────── */
 
-.task__lane {
+.task__bar {
   position: relative;
-  display: flex;
-  gap: 3px;
-  height: 14px;
+  height: 10px;
   margin: 10px 0 8px;
-}
-.task__block {
-  flex: 1 1 0;
-  min-width: 3px;
   background: rgba(143, 163, 194, 0.13);
-  border-radius: 2.5px;
+  border-radius: 5px;
   overflow: hidden;
 }
-.task__block-fill {
+.task__bar-fill {
   position: relative;
   height: 100%;
+  border-radius: 5px;
   background: var(--mist);
-  border-radius: 2.5px;
+  transition: width 0.25s ease;
 }
-/* 非运行状态的语义色（运行色由内联光谱提供） */
-.task--paused .task__block-fill { background: var(--gold); }
-.task--failed .task__block-fill { background: var(--ember); }
-.task--completed .task__block-fill { background: var(--spark); }
-.task--cancelled .task__block-fill,
-.task--queued .task__block-fill { background: var(--mist); }
+.task--running .task__bar-fill {
+  /* 光随进度充盈：青→紫光谱在填充区间内展开 */
+  background: linear-gradient(90deg, var(--spark), #8e7cf0);
+}
+/* 非运行状态语义色 */
+.task--paused .task__bar-fill { background: var(--gold); }
+.task--failed .task__bar-fill { background: var(--ember); }
+.task--completed .task__bar-fill { background: var(--spark); }
 
-/* 运行中：逐块光波扫掠（按块位错开成一道浪） */
-.task--running .task__block-fill::after {
+/* 运行中：一道流光周期性掠过 */
+.task--running .task__bar-fill::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.38), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
   transform: translateX(-100%);
   animation: sheen 2.4s ease-in-out infinite;
-  animation-delay: calc(var(--i, 0) * 0.12s);
 }
-/* 完成：一次掠光横扫整条光道 */
-.task--completed .task__lane::after {
+/* 完成：一次掠光横扫 */
+.task--completed .task__bar::after {
   content: "";
   position: absolute;
-  inset: -1px;
+  inset: 0;
   background: linear-gradient(100deg, transparent 35%, rgba(232, 238, 247, 0.45) 50%, transparent 65%);
   transform: translateX(-100%);
   animation: glint 0.9s ease-out 0.05s 1 forwards;
-  border-radius: 3px;
   pointer-events: none;
 }
 
@@ -306,8 +301,9 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
 
 @media (prefers-reduced-motion: reduce) {
   .task { animation: none; }
-  .task--running .task__block-fill::after { animation: none; display: none; }
-  .task--completed .task__lane::after { animation: none; display: none; }
+  .task--running .task__bar-fill::after { animation: none; display: none; }
+  .task--completed .task__bar::after { animation: none; display: none; }
+  .task__bar-fill { transition: none; }
   .btn, .modal input { transition: none; }
 }
 
