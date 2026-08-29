@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { api } from './api';
 import type { LiveInfo, ManagerConfig, TaskEvent, TaskRecord } from './types';
@@ -21,6 +21,7 @@ function Spark({ className }: { className?: string }) {
 export default function App() {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [live, setLive] = useState<Map<string, LiveInfo>>(new Map());
+  const pendingLive = useRef<Map<string, LiveInfo>>(new Map());
   const [config, setConfig] = useState<ManagerConfig | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -51,22 +52,20 @@ export default function App() {
   useEffect(() => {
     refresh();
     api.getConfig().then(setConfig).catch(() => {});
-    // Progress 事件走 live 直渲（4Hz 不再触发整表 IPC）；State 事件即时对账 + 2s 轮询兜底
+    // Progress 事件（后端 250ms 节奏）先进缓冲，按 1s 节拍统一上屏——
+    // 视觉更新周期 1 秒，数字与进度条不闪烁；State 事件即时对账 + 2s 轮询兜底
     const un = listen<TaskEvent>('task-event', (ev) => {
       const p = ev.payload;
       if (p.kind === 'Progress') {
-        setLive((prev) => {
-          const next = new Map(prev);
-          next.set(p.id, {
-            downloaded: p.downloaded,
-            total: p.total,
-            speed: p.speed,
-            segments: p.segments,
-          });
-          return next;
+        pendingLive.current.set(p.id, {
+          downloaded: p.downloaded,
+          total: p.total,
+          speed: p.speed,
+          segments: p.segments,
         });
       } else {
         if (p.state !== 'running') {
+          pendingLive.current.delete(p.id);
           setLive((prev) => {
             if (!prev.has(p.id)) return prev;
             const next = new Map(prev);
@@ -77,9 +76,20 @@ export default function App() {
         refresh();
       }
     });
+    const flushTimer = setInterval(() => {
+      if (pendingLive.current.size === 0) return;
+      const batch = pendingLive.current;
+      pendingLive.current = new Map();
+      setLive((prev) => {
+        const next = new Map(prev);
+        for (const [id, info] of batch) next.set(id, info);
+        return next;
+      });
+    }, 1000);
     const timer = setInterval(refresh, 2000);
     return () => {
       un.then((f) => f());
+      clearInterval(flushTimer);
       clearInterval(timer);
     };
   }, [refresh]);

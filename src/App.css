@@ -171,6 +171,7 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
   height: 100%;
   border-radius: 5px;
   background: var(--mist);
+  overflow: hidden; /* 流光只在本段内扫掠，绝不越出当前进度 */
   transition: width 0.25s ease;
 }
 .task--running .task__bar-fill {
