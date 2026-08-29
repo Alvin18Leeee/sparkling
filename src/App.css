@@ -98,8 +98,15 @@ body {
 
 /* ── 列表容器 ─────────────────────────────────────────── */
 
-/* 永久预留滚动条槽位：滚动条出现/消失不改变条目宽度 */
-main { flex: 1; overflow-y: auto; scrollbar-gutter: stable; padding: 18px 22px 28px; }
+/* 永久预留滚动条槽位：滚动条出现/消失不改变条目宽度。
+   槽位（10px）在 padding 之外，故右 padding 取 12px —— 12 + 10 = 22，
+   与左侧空白恒等宽 */
+main {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 18px 12px 28px 22px;
+}
 main::-webkit-scrollbar { width: 10px; }
 main::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 5px; }
 main::-webkit-scrollbar-thumb:hover { background: #25406b; }
