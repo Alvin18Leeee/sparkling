@@ -11,6 +11,18 @@ const STATE_META: Record<TaskState, { label: string }> = {
   cancelled: { label: '已取消' },
 };
 
+/** 从 URL 末段取显示名（percent-decode；无可用段时返回 null） */
+function urlName(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const last = u.pathname.split('/').filter(Boolean).pop();
+    if (!last) return null;
+    return decodeURIComponent(last);
+  } catch {
+    return null;
+  }
+}
+
 export default function TaskRow({
   task,
   live,
@@ -23,7 +35,8 @@ export default function TaskRow({
   const total = live?.total ?? task.total_size ?? 0;
   const downloaded = live?.downloaded ?? task.downloaded;
   const pct = total > 0 ? Math.min(100, Math.floor((downloaded / total) * 100)) : 0;
-  const name = task.filename ?? '解析中…';
+  // 探测完成前显示 URL 末段；探测失败的不再永远卡在"解析中"
+  const name = task.filename ?? urlName(task.url) ?? '解析中…';
   const running = task.state === 'running';
   const act = (fn: (id: string) => Promise<void>) => () => {
     fn(task.id).then(onChanged).catch((e) => alert(String(e)));

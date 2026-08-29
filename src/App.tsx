@@ -95,6 +95,7 @@ export default function App() {
   }, [refresh]);
 
   const totalSpeed = [...live.values()].reduce((a, b) => a + b.speed, 0);
+  const hasRunning = tasks.some((t) => t.state === 'running');
 
   return (
     <div className="app">
@@ -103,12 +104,14 @@ export default function App() {
           <Spark className="brand__spark" />
           <span className="brand__name">SPARKLING</span>
         </div>
-        <div className="speed" aria-label="总下载速度">
-          <span className="speed__label">总速度</span>
-          <span className="speed__value">
-            {fmtBytes(totalSpeed)}<span className="speed__unit">/s</span>
-          </span>
-        </div>
+        {hasRunning && (
+          <div className="speed" aria-label="总下载速度">
+            <span className="speed__label">总速度</span>
+            <span className="speed__value">
+              {fmtBytes(totalSpeed)}<span className="speed__unit">/s</span>
+            </span>
+          </div>
+        )}
         <div className="toolbar__actions">
           <button className="btn btn--primary" onClick={() => setShowAdd(true)}>
             ＋ 新建下载

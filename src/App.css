@@ -116,7 +116,7 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
 }
 .task:hover { border-color: #2f4770; }
 
-.task__head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.task__head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .task__name {
   flex: 1;
   min-width: 0;
@@ -127,7 +127,7 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
 }
 .task__pct {
   font-family: var(--font-data);
-  font-size: 13px;
+  font-size: 12px;
   color: var(--mist);
   font-variant-numeric: tabular-nums;
   flex: none;
