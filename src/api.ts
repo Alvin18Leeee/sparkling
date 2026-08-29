@@ -14,7 +14,7 @@ export const api = {
   getConfig: () => invoke<ManagerConfig>('get_config'),
   updateConfig: (cfg: ManagerConfig) => invoke<void>('update_config', { cfg }),
   probeVideo: (url: string) => invoke<VideoInfo>('probe_video', { url }),
-  addVideoTask: (url: string, video: VideoParams, filename: string, videoMeta: VideoMeta | null) =>
+  addVideoTask: (url: string, video: VideoParams, filename: string | null, videoMeta: VideoMeta | null) =>
     invoke<string>('add_task', {
       url, filename, segments: null,
       kind: 'video', video, videoMeta,

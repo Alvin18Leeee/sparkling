@@ -293,6 +293,18 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
 }
 .modal input:focus { outline: none; border-color: var(--spark); }
 .modal input:focus-visible { outline: 2px solid var(--spark); outline-offset: 1px; }
+/* 画质下拉与输入同款（color-scheme: dark 下原生弹出列表同为深色） */
+.modal select {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  background: var(--abyss);
+  color: var(--foam);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 11px;
+}
+.modal select:focus { outline: none; border-color: var(--spark); }
 .modal label.checkbox { display: flex; align-items: center; gap: 9px; margin-top: 15px; }
 .modal label.checkbox input { width: auto; accent-color: var(--spark); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
@@ -302,6 +314,32 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
   margin-top: 8px;
   overflow-wrap: anywhere;
 }
+
+/* ── 视频链接提示 + 解析面板 ─────────────────────────── */
+
+/* URL 输入框下方的"检测到视频链接"提示行 */
+.video-hint { display: flex; align-items: center; gap: 8px; margin: 6px 0 2px;
+  color: var(--spark); font-size: 12px; }
+
+.video-panel__head { display: flex; gap: 12px; margin-bottom: 12px; }
+.video-panel__thumb { width: 120px; aspect-ratio: 16/9; object-fit: cover; border-radius: 4px; flex: none; }
+.video-panel__title { font-weight: 600; line-height: 1.4; }
+.video-panel__sub { color: var(--mist); font-size: 12px; margin-top: 4px; }
+.video-panel__list { max-height: 200px; overflow-y: auto; border: 1px solid var(--line);
+  border-radius: 4px; padding: 6px 10px; margin: 8px 0; }
+/* 带 .modal 前缀抬过 .modal label 的特异性（否则会被改成块级 + 13px 外距） */
+.modal .video-panel__entry {
+  display: flex; gap: 8px; align-items: center;
+  margin: 0; padding: 3px 0; font-size: 13px; color: var(--foam);
+}
+/* 抵消 .modal input 的 width:100%（复选框恢复原生尺寸，同 label.checkbox 的处理） */
+.modal .video-panel__entry input { width: auto; accent-color: var(--spark); flex: none; }
+.video-panel__entry-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-panel__entry-dur { color: var(--mist); font-size: 12px; flex: none; }
+.video-panel__formats summary { cursor: pointer; font-size: 12px; color: var(--mist); margin: 6px 0; }
+.video-panel__formats table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.video-panel__formats td { padding: 2px 8px 2px 0; border-bottom: 1px solid var(--line); }
+.video-panel__loading { color: var(--mist); padding: 24px 0; text-align: center; }
 
 /* ── 动效 ─────────────────────────────────────────────── */
 
