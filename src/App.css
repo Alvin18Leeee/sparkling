@@ -116,7 +116,7 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
 }
 .task:hover { border-color: #2f4770; }
 
-.task__head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.task__head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .task__name {
   flex: 1;
   min-width: 0;
@@ -133,19 +133,20 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
   flex: none;
 }
 .task__state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   font-size: 12px;
   color: var(--mist);
   flex: none;
 }
+/* 圆点必须是普通内联块（inline-flex 的基线取自首个子项即圆点底缘，
+   会把整组文字顶高——基线对齐就全歪了） */
 .task__state-dot {
+  display: inline-block;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--mist);
-  flex: none;
+  margin-right: 6px;
+  vertical-align: -1px;
 }
 .task--running .task__state-dot { background: var(--glint); box-shadow: 0 0 6px var(--glint); }
 .task--running .task__state { color: var(--glint); }
