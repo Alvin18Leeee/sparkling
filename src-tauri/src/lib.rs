@@ -87,11 +87,11 @@ fn update_config(state: State<AppState>, cfg: ManagerConfig) -> Result<(), Strin
 }
 
 /// Windows 标题栏定制：
+/// - WS_EX_DLGMODALFRAME（对话框框架）：标题栏结构性无图标槽 —— 图标照常设置
+///   （任务栏/Alt+Tab/悬停缩略图正常取用），但标题栏不绘制。这是 Win32 经典方案
 /// - 标题栏染成 chrome（#102235，与前端工具栏色带一致），边框染成 line（#23385C）
-/// - 标题文字颜色 = 标题栏底色（标题在标题栏内隐身，但 Alt+Tab/任务栏正常显示"Sparkling"）
-/// - 窗口小图标设为全透明 1×1（标题栏不显示 icon；两级图标清空会回落到
-///   exe 资源/默认占位图，透明图标才能真隐藏），类图标清空防回退
-/// - 任务栏/Alt-Tab 图标走窗口大图标 → exe 资源（icons/icon.ico 真图标）
+/// - 标题文字颜色 = 标题栏底色（标题在标题栏内隐身，Alt+Tab/任务栏/缩略图正常显示）
+/// - 窗口大/小图标 = exe 资源星标（tauri-build 以 ID 32512 嵌入 icons/icon.ico）
 /// - 系统按钮、原生拖拽、双击最大化、Snap Layouts 全部保留
 #[cfg(target_os = "windows")]
 fn style_title_bar(hwnd: windows_sys::Win32::Foundation::HWND) {
@@ -99,18 +99,20 @@ fn style_title_bar(hwnd: windows_sys::Win32::Foundation::HWND) {
         DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
     };
     use windows_sys::Win32::Graphics::Gdi::{
-        CreateBitmap, DeleteObject, RedrawWindow, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
+        RedrawWindow, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateIconIndirect, LoadImageW, SendMessageW, SetClassLongPtrW, GCLP_HICON, GCLP_HICONSM,
-        ICONINFO, ICON_BIG, ICON_SMALL, ICON_SMALL2, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED,
-        WM_SETICON,
+        GetSystemMetrics, GetWindowLongPtrW, LoadImageW, SendMessageW, SetWindowLongPtrW,
+        SetWindowPos, GWL_EXSTYLE, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED,
+        SM_CXSMICON, SM_CYSMICON, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_NOZORDER, WM_SETICON, WS_EX_DLGMODALFRAME,
     };
     unsafe {
-        // 大图标（任务栏/Alt+Tab 用）：从 exe 资源加载（tauri-build 以 ID 32512 嵌入 icons/icon.ico）
+        // 大图标（任务栏/Alt+Tab）与小图标（任务栏悬停缩略图）都设为 exe 资源星标
+        let module = GetModuleHandleW(std::ptr::null());
         let big = LoadImageW(
-            GetModuleHandleW(std::ptr::null()),
+            module,
             32512 as windows_sys::core::PCWSTR,
             IMAGE_ICON,
             0,
@@ -119,10 +121,30 @@ fn style_title_bar(hwnd: windows_sys::Win32::Foundation::HWND) {
         );
         if !big.is_null() {
             SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, big as isize);
-            // ICON_SMALL2（DPI 感知小图标）：Explorer 任务栏悬停缩略图优先读它——
-            // 喂星标让缩略图有图标；标题栏画的是 ICON_SMALL（保持透明）
-            SendMessageW(hwnd, WM_SETICON, ICON_SMALL2 as usize, big as isize);
         }
+        let small = LoadImageW(
+            module,
+            32512 as windows_sys::core::PCWSTR,
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON),
+            GetSystemMetrics(SM_CYSMICON),
+            LR_SHARED,
+        );
+        if !small.is_null() {
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, small as isize);
+        }
+        // 对话框框架：标题栏不再有图标槽（图标本身照设，别处照常取用）
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_DLGMODALFRAME as isize);
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
         // COLORREF 布局为 0x00BBGGRR
         let chrome: u32 = 0x0035_2210; // #102235 chrome（与工具栏色带一致）
         DwmSetWindowAttribute(
@@ -145,31 +167,13 @@ fn style_title_bar(hwnd: windows_sys::Win32::Foundation::HWND) {
             &border as *const _ as *const core::ffi::c_void,
             4,
         );
-        // 全透明 1×1 单色图标：AND 位 1 = 不绘制（清空图标只会回落到占位图）
-        // 单色图标 hbmColor 为空时，mask 高度 = 2（上行 AND、下行 XOR）
-        let bits: [u8; 4] = [0x80, 0x00, 0x00, 0x00];
-        let mask = CreateBitmap(1, 2, 1, 1, bits.as_ptr() as *const core::ffi::c_void);
-        let mut info = ICONINFO {
-            fIcon: 1,
-            xHotspot: 0,
-            yHotspot: 0,
-            hbmMask: mask,
-            hbmColor: std::ptr::null_mut(),
-        };
-        let invisible = CreateIconIndirect(&mut info);
-        // 类图标清空 + 小图标换透明
-        SetClassLongPtrW(hwnd, GCLP_HICON, 0);
-        SetClassLongPtrW(hwnd, GCLP_HICONSM, 0);
-        SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, invisible as isize);
-        // 强制非客户区立即重绘（防图标清除后残影）
+        // 强制非客户区立即重绘
         RedrawWindow(
             hwnd,
             std::ptr::null(),
             std::ptr::null_mut(),
             RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW,
         );
-        // CreateIconIndirect 复制了位图，临时 mask 可回收；invisible 归 WM_SETICON 所有
-        DeleteObject(mask);
     }
 }
 
