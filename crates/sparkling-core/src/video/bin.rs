@@ -32,8 +32,14 @@ pub fn version_gt(a: &str, b: &str) -> bool {
 
 /// 跑 `yt-dlp --version`，取 stdout 首行
 pub async fn ytdlp_version(bin: &Path) -> Result<String> {
-    let out = tokio::process::Command::new(bin)
-        .arg("--version")
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("--version");
+    #[cfg(windows)]
+    {
+        // CREATE_NO_WINDOW：GUI 进程 spawn 控制台二进制不闪窗，与 TokioChildRunner 一致
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd
         .output()
         .await
         .map_err(|e| SparklingError::Other(format!("运行 yt-dlp 失败: {e}")))?;
@@ -46,7 +52,14 @@ pub async fn ytdlp_version(bin: &Path) -> Result<String> {
 
 /// 下载到 dest.tmp 后原子 rename 到 dest
 pub async fn download_replace(url: &str, dest: &Path) -> Result<()> {
-    let resp = reqwest::get(url)
+    // 只限连接建立（不限总时长——大文件下载可能需要数分钟，总 timeout 会掐断）
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| SparklingError::Other(format!("构建 HTTP 客户端失败: {e}")))?;
+    let resp = client
+        .get(url)
+        .send()
         .await
         .map_err(|e| SparklingError::Network(format!("下载失败: {e}")))?;
     if !resp.status().is_success() {
