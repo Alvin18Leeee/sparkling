@@ -9,6 +9,7 @@ pub mod segment;
 pub mod store;
 pub mod task;
 pub mod throttle;
+pub mod video;
 
 pub use engine::{ControlMsg, Engine, ProgressSnapshot, SegmentProgress, TaskHandle};
 pub use error::{Result, SparklingError};
