@@ -18,7 +18,8 @@
         "minWidth": 760,
         "minHeight": 480,
         "theme": "Dark",
-        "backgroundColor": "#0B1526"
+        "backgroundColor": "#0B1526",
+        "decorations": false
       }
     ],
     "security": { "csp": null }

@@ -44,6 +44,10 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+/* 工具栏兼作拖拽区：展示性内容穿通鼠标事件（按下落到 header 上才能拖动窗口） */
+.brand,
+.speed { pointer-events: none; user-select: none; }
+
 .brand { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
 .brand__spark { width: 15px; height: 15px; color: var(--spark); flex: none; }
 .brand__name {
@@ -74,6 +78,32 @@ body {
 .speed__unit { font-size: 13px; font-weight: 400; color: var(--mist); margin-left: 2px; }
 
 .toolbar__actions { display: flex; gap: 8px; flex: none; }
+
+/* ── 自绘窗口控制按钮（无边框窗口右上角） ─────────────── */
+
+.win-controls {
+  display: flex;
+  align-self: stretch;
+  flex: none;
+  margin-left: 6px;
+  margin-right: -22px; /* 抵消工具栏右 padding，按钮贴窗口右缘 */
+}
+.win-btn {
+  width: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--mist);
+  cursor: default;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.win-btn:hover { background: rgba(232, 238, 247, 0.09); color: var(--foam); }
+.win-btn:focus-visible { outline: 2px solid var(--spark); outline-offset: -3px; }
+.win-btn--close:hover { background: #c42b1c; color: #ffffff; }
+.win-btn svg { width: 10px; height: 10px; }
 
 /* ── 按钮 ─────────────────────────────────────────────── */
 
@@ -327,7 +357,7 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
   .toolbar { flex-wrap: wrap; gap: 10px 14px; }
   .brand { flex: none; }
   .speed { margin-left: auto; }
-  .toolbar__actions { width: 100%; }
+  .toolbar__actions { flex: 1; }
   .toolbar__actions .btn { flex: 1; }
   .task__pct { display: none; }
   .task__meta { flex-wrap: wrap; }
