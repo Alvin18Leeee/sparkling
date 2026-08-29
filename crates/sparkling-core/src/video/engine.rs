@@ -63,7 +63,6 @@ impl Engine for VideoEngine {
             return Err(SparklingError::Other("视频任务缺少视频参数".into()));
         }
         let id: TaskId = uuid::Uuid::new_v4().to_string();
-        let filename = spec.filename.clone().unwrap_or_else(|| "video".into());
         let (progress_tx, progress_rx) = watch::channel(ProgressSnapshot {
             state: TaskState::Running,
             downloaded: 0,
@@ -71,7 +70,8 @@ impl Engine for VideoEngine {
             speed: 0,
             segments: vec![],
             error: None,
-            filename: Some(filename),
+            // 未指定时保持 None：manager 只在 Some 时落库，假名会污染 TaskRecord 与重启恢复
+            filename: spec.filename.clone(),
             merging: false,
         });
         let (control_tx, control_rx) = mpsc::unbounded_channel();
@@ -117,8 +117,11 @@ pub fn build_args(
         .video
         .as_ref()
         .expect("视频任务必有 video 参数（submit 已校验）");
-    let filename = spec.filename.as_deref().unwrap_or("video");
-    let out = spec.save_dir.join(format!("{filename}.%(ext)s"));
+    // filename 未指定（直下路径）时按 yt-dlp 标题模板命名（spec 规定），避免全部产出 video.mp4
+    let out = match spec.filename.as_deref() {
+        Some(f) => spec.save_dir.join(format!("{f}.%(ext)s")),
+        None => spec.save_dir.join("%(title).200B [%(id)s].%(ext)s"),
+    };
     let mut args: Vec<String> = vec![
         "-f".into(),
         video.format.clone(),
@@ -240,7 +243,9 @@ async fn supervise_video(
     mut control_rx: mpsc::UnboundedReceiver<ControlMsg>,
     registry: Arc<Mutex<HashMap<TaskId, JoinHandle<()>>>>,
 ) {
-    let filename = spec.filename.clone().unwrap_or_else(|| "video".into());
+    // None（直下路径）时跳过 cleanup_partial：残留文件名是 yt-dlp 标题模板产物，
+    // 无法前缀匹配（与 manager remove_task 的 filename=Some 前提一致）
+    let filename = spec.filename.clone();
     let mut snapshot = progress_tx.subscribe().borrow().clone();
     loop {
         let args = build_args(
@@ -303,7 +308,9 @@ async fn supervise_video(
         };
         match outcome {
             RunOutcome::Cancelled => {
-                cleanup_partial(&spec.save_dir, &filename);
+                if let Some(f) = &filename {
+                    cleanup_partial(&spec.save_dir, f);
+                }
                 snapshot.state = TaskState::Cancelled;
                 snapshot.speed = 0;
                 let _ = progress_tx.send(snapshot.clone());
@@ -325,7 +332,9 @@ async fn supervise_video(
                                 break; // 回外层 loop 重启进程
                             }
                             Some(ControlMsg::Cancel) | None => {
-                                cleanup_partial(&spec.save_dir, &filename);
+                                if let Some(f) = &filename {
+                                    cleanup_partial(&spec.save_dir, f);
+                                }
                                 snapshot.state = TaskState::Cancelled;
                                 let _ = progress_tx.send(snapshot.clone());
                                 registry.lock().unwrap().remove(&id);
@@ -337,7 +346,9 @@ async fn supervise_video(
                     continue;
                 }
                 if res.killed == Some(KillReason::Cancel) {
-                    cleanup_partial(&spec.save_dir, &filename);
+                    if let Some(f) = &filename {
+                        cleanup_partial(&spec.save_dir, f);
+                    }
                     snapshot.state = TaskState::Cancelled;
                     let _ = progress_tx.send(snapshot.clone());
                     registry.lock().unwrap().remove(&id);
@@ -367,7 +378,9 @@ async fn supervise_video(
             }
             RunOutcome::Done(Err(_)) => {
                 // done JoinError（abort 等）→ 取消语义
-                cleanup_partial(&spec.save_dir, &filename);
+                if let Some(f) = &filename {
+                    cleanup_partial(&spec.save_dir, f);
+                }
                 snapshot.state = TaskState::Cancelled;
                 let _ = progress_tx.send(snapshot.clone());
                 registry.lock().unwrap().remove(&id);
@@ -431,6 +444,21 @@ mod tests {
             .windows(2)
             .any(|w| w[0] == "-o" && w[1].ends_with("测试视频.%(ext)s")));
         assert_eq!(args.last().unwrap(), "https://www.youtube.com/watch?v=test");
+    }
+
+    #[test]
+    fn build_args_none_filename_uses_title_template() {
+        // 直下路径（quickDownload）filename 传 None：应按 yt-dlp 标题模板命名，
+        // 不得兜底 "video"（否则重复直下全部产出 video.mp4 同名冲突）
+        let mut spec = video_spec(Path::new("D:\\dl"));
+        spec.filename = None;
+        let args = build_args(&spec, None, None, None);
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-o" && w[1].ends_with("%(title).200B [%(id)s].%(ext)s")),
+            "filename 未指定时 -o 应以标题模板结尾：{:?}",
+            args
+        );
     }
 
     #[test]

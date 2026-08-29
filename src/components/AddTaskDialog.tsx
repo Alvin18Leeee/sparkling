@@ -94,7 +94,7 @@ export default function AddTaskDialog({
   };
 
   // 直下路径（D4）：已有画质偏好时跳过解析，按偏好构造 selector 直接入队
-  // （未解析拿不到标题，filename 留 null——后端 build_args 对 None 兜底 "video"；字幕跟默认设置）
+  // （未解析拿不到标题，filename 留 null——后端按 yt-dlp 标题模板命名；字幕跟默认设置）
   const quickDownload = async () => {
     const selector = selectorFromPreference(preference);
     if (!selector) return;
