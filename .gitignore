@@ -8,3 +8,5 @@ tasks.db
 settings.json
 # tauri-build 每次构建生成的 ACL/schema 产物
 src-tauri/gen/
+# fetch-bin.ps1 下载的外部二进制（yt-dlp/ffmpeg），不入库
+src-tauri/bin/

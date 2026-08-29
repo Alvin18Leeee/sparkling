@@ -20,12 +20,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: 前端依赖
         run: npm install
-      - name: 构建安装包（含便携版 exe）
+      - name: 下载外部二进制（yt-dlp 基线 + ffmpeg）
+        run: npm run fetch:bin
+      - name: 构建安装包（含便携版）
         run: npm run tauri build
+      - name: 组装便携版 zip（exe + bin）
+        run: |
+          mkdir -p portable/bin
+          cp target/release/sparkling.exe portable/
+          cp src-tauri/bin/yt-dlp.exe, src-tauri/bin/ffmpeg.exe portable/bin/
+          Compress-Archive -Path portable/* -DestinationPath sparkling-portable-windows-x64.zip
+        shell: pwsh
       - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           files: |
             target/release/bundle/nsis/*.exe
-            target/release/sparkling.exe
+            sparkling-portable-windows-x64.zip
           generate_release_notes: true
