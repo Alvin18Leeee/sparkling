@@ -19,11 +19,3 @@ serde_json = "1"
 # 需要作为直接依赖才能引用该类型；sparkling-core 已启用 full，无额外编译成本
 tokio = { version = "1", features = ["sync"] }
 sparkling-core = { path = "../crates/sparkling-core" }
-
-[target.'cfg(windows)'.dependencies]
-# 标题栏 DWM 染色与图标隐藏（已在依赖树中，零额外编译）
-windows-sys = { version = "0.59", features = [
-  "Win32_Foundation",
-  "Win32_Graphics_Dwm",
-  "Win32_UI_WindowsAndMessaging",
-] }

@@ -11,15 +11,7 @@
   },
   "app": {
     "windows": [
-      {
-        "title": "",
-        "width": 1000,
-        "height": 680,
-        "minWidth": 760,
-        "minHeight": 480,
-        "theme": "Dark",
-        "backgroundColor": "#0B1526"
-      }
+      { "title": "Sparkling", "width": 1000, "height": 680, "minWidth": 760, "minHeight": 480 }
     ],
     "security": { "csp": null }
   },

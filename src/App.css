@@ -327,7 +327,7 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
   .toolbar { flex-wrap: wrap; gap: 10px 14px; }
   .brand { flex: none; }
   .speed { margin-left: auto; }
-  .toolbar__actions { flex: 1; }
+  .toolbar__actions { width: 100%; }
   .toolbar__actions .btn { flex: 1; }
   .task__pct { display: none; }
   .task__meta { flex-wrap: wrap; }
