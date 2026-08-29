@@ -1,6 +1,7 @@
 use sparkling_core::http_engine::HttpEngine;
 use sparkling_core::manager::{AddTaskOptions, ManagerConfig, TaskManager};
 use sparkling_core::store::TaskRecord;
+use sparkling_core::task::TaskKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -36,6 +37,9 @@ fn add_task(
         filename,
         segments,
         max_speed: None,
+        kind: TaskKind::Http,
+        video: None,
+        video_meta: None,
     };
     state
         .manager

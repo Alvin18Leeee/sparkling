@@ -1,4 +1,4 @@
-use crate::task::TaskState;
+use crate::task::{TaskKind, TaskState, VideoMeta, VideoParams};
 use crate::{Result, SparklingError};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -18,6 +18,9 @@ pub struct TaskRecord {
     pub downloaded: u64,
     pub error: Option<String>,
     pub created_at: i64,
+    pub kind: TaskKind,
+    pub video: Option<VideoParams>,
+    pub video_meta: Option<VideoMeta>,
 }
 
 pub struct TaskStore {
@@ -94,6 +97,10 @@ impl TaskStore {
             downloaded: row.get(8)?,
             error: row.get(9)?,
             created_at: row.get(10)?,
+            // 老行皆 http；Task 2 接管列读取
+            kind: TaskKind::Http,
+            video: None,
+            video_meta: None,
         })
     }
 
@@ -180,6 +187,9 @@ mod tests {
             downloaded: 0,
             error: None,
             created_at: 1700000000,
+            kind: TaskKind::Http,
+            video: None,
+            video_meta: None,
         }
     }
 

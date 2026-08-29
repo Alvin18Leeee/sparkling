@@ -17,5 +17,5 @@ pub use manager::{AddTaskOptions, ManagerConfig, TaskEvent, TaskManager};
 pub use probe::{probe, ProbeResult};
 pub use segment::{split, take_over, Segment};
 pub use store::{TaskRecord, TaskStore};
-pub use task::{TaskId, TaskSpec, TaskState};
+pub use task::{TaskId, TaskKind, TaskSpec, TaskState, VideoMeta, VideoParams};
 pub use throttle::TokenBucket;

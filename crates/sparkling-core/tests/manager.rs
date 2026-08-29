@@ -3,7 +3,7 @@ mod common;
 use common::{poll_until, sha256_hex, start, wait_event_state, ServerConfig};
 use sparkling_core::http_engine::{HttpEngine, RetryPolicy};
 use sparkling_core::manager::{AddTaskOptions, ManagerConfig, TaskEvent, TaskManager};
-use sparkling_core::task::TaskState;
+use sparkling_core::task::{TaskKind, TaskState};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,6 +23,9 @@ fn opts(dir: &tempfile::TempDir, max_speed: Option<u64>) -> AddTaskOptions {
         filename: None,
         segments: Some(4),
         max_speed,
+        kind: TaskKind::Http,
+        video: None,
+        video_meta: None,
     }
 }
 
@@ -486,6 +489,9 @@ async fn add_task_works_off_runtime_thread() {
                     filename: None,
                     segments: Some(2),
                     max_speed: None,
+                    kind: TaskKind::Http,
+                    video: None,
+                    video_meta: None,
                 },
             )
             .unwrap();

@@ -3,7 +3,7 @@
 use crate::control_file;
 use crate::engine::{Engine, TaskHandle};
 use crate::store::{TaskRecord, TaskStore};
-use crate::task::{TaskId, TaskSpec, TaskState};
+use crate::task::{TaskId, TaskKind, TaskSpec, TaskState, VideoMeta, VideoParams};
 use crate::{Result, SparklingError};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -18,6 +18,16 @@ pub struct ManagerConfig {
     pub auto_resume_on_start: bool,
     pub global_speed_limit: Option<u64>,
     pub default_segments: u32,
+    #[serde(default)]
+    pub video_max_height: Option<u32>,
+    #[serde(default)]
+    pub video_audio_only: bool,
+    #[serde(default = "default_sub_langs")]
+    pub video_sub_langs: String,
+    #[serde(default)]
+    pub video_auto_subs: bool,
+    #[serde(default)]
+    pub cookie_file: Option<std::path::PathBuf>,
 }
 
 impl Default for ManagerConfig {
@@ -27,8 +37,17 @@ impl Default for ManagerConfig {
             auto_resume_on_start: true,
             global_speed_limit: None,
             default_segments: 8,
+            video_max_height: None,
+            video_audio_only: false,
+            video_sub_langs: default_sub_langs(),
+            video_auto_subs: false,
+            cookie_file: None,
         }
     }
+}
+
+fn default_sub_langs() -> String {
+    "zh-Hans,en".into()
 }
 
 /// 推送给 UI 的事件流（broadcast：晚订阅者只看新事件，不回放）
@@ -47,6 +66,7 @@ pub enum TaskEvent {
         total: u64,
         speed: u64,
         segments: Vec<crate::engine::SegmentProgress>,
+        merging: bool,
     },
 }
 
@@ -56,6 +76,9 @@ pub struct AddTaskOptions {
     pub filename: Option<String>,
     pub segments: Option<u32>,
     pub max_speed: Option<u64>,
+    pub kind: TaskKind,
+    pub video: Option<VideoParams>,
+    pub video_meta: Option<VideoMeta>,
 }
 
 #[derive(Clone)]
@@ -128,10 +151,14 @@ impl TaskManager {
 
     pub fn add_task(&self, url: String, opts: AddTaskOptions) -> Result<TaskId> {
         let id = uuid::Uuid::new_v4().to_string();
-        let segments = opts
+        let mut segments = opts
             .segments
             .unwrap_or(self.config().default_segments)
             .clamp(1, 64);
+        // 视频任务无分片概念（yt-dlp 内部管理），固定存 1
+        if opts.kind == TaskKind::Video {
+            segments = 1;
+        }
         let rec = TaskRecord {
             id: id.clone(),
             url,
@@ -140,6 +167,9 @@ impl TaskManager {
             filename: opts.filename.clone(),
             segments,
             max_speed: opts.max_speed,
+            kind: opts.kind,
+            video: opts.video.clone(),
+            video_meta: opts.video_meta.clone(),
             total_size: None,
             downloaded: 0,
             error: None,
@@ -391,6 +421,8 @@ fn try_schedule(inner: &Arc<Inner>) {
             filename: rec.filename.clone(),
             segments: rec.segments,
             max_speed: rec.max_speed,
+            kind: rec.kind,
+            video: rec.video.clone(),
         };
         inner.active.fetch_add(1, Ordering::SeqCst);
         let inner2 = inner.clone();
@@ -466,6 +498,7 @@ async fn monitor_task(inner: Arc<Inner>, id: TaskId, handle: TaskHandle) {
             total: snap.total,
             speed: snap.speed,
             segments: snap.segments.clone(),
+            merging: snap.merging,
         });
         if snap.state != prev {
             let was_running = prev == TaskState::Running;

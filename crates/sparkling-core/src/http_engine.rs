@@ -2,7 +2,7 @@ use crate::control_file;
 use crate::engine::{ControlMsg, Engine, ProgressSnapshot, SegmentProgress, TaskHandle};
 use crate::probe::{self, ProbeResult};
 use crate::segment::Segment;
-use crate::task::{TaskId, TaskSpec, TaskState};
+use crate::task::{TaskId, TaskKind, TaskSpec, TaskState};
 use crate::throttle::TokenBucket;
 use crate::{Result, SparklingError};
 use async_trait::async_trait;
@@ -249,6 +249,9 @@ impl Drop for HttpEngine {
 #[async_trait]
 impl Engine for HttpEngine {
     async fn submit(&self, spec: TaskSpec) -> Result<TaskHandle> {
+        if spec.kind != TaskKind::Http {
+            return Err(SparklingError::Other("HttpEngine 收到非 HTTP 任务".into()));
+        }
         let id: TaskId = uuid::Uuid::new_v4().to_string();
         let (progress_tx, progress_rx) = watch::channel(ProgressSnapshot {
             state: TaskState::Running,
@@ -258,6 +261,7 @@ impl Engine for HttpEngine {
             segments: vec![],
             error: None,
             filename: None, // 探测完成后由 reporter 帧携带（D35）
+            merging: false,
         });
         let (control_tx, control_rx) = mpsc::unbounded_channel();
         let join = tokio::spawn(supervise(
@@ -752,6 +756,7 @@ fn spawn_reporter(
                     segments: shared.snapshot_segments(),
                     error: None,
                     filename: Some(shared.filename.clone()),
+                    merging: false,
                 });
                 break;
             }
@@ -787,6 +792,7 @@ fn spawn_reporter(
                     segments: shared.snapshot_segments(),
                     error: None,
                     filename: Some(shared.filename.clone()),
+                    merging: false,
                 })
                 .is_err()
             {
