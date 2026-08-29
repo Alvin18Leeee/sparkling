@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    name: 构建 Windows 安装包并发布
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write # 创建 GitHub Release 并上传产物
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: Swatinem/rust-cache@v2
+      - name: 前端依赖
+        run: npm install
+      - name: 构建安装包（含便携版 exe）
+        run: npm run tauri build
+      - name: 发布到 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/bundle/nsis/*.exe
+            target/release/sparkling.exe
+          generate_release_notes: true

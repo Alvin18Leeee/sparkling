@@ -23,5 +23,9 @@
     ],
     "security": { "csp": null }
   },
-  "bundle": { "active": false }
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"]
+  }
 }
