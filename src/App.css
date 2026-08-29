@@ -146,7 +146,7 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
   border-radius: 50%;
   background: var(--mist);
   margin-right: 6px;
-  vertical-align: -1px;
+  vertical-align: 1px;
 }
 .task--running .task__state-dot { background: var(--glint); box-shadow: 0 0 6px var(--glint); }
 .task--running .task__state { color: var(--glint); }
