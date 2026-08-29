@@ -278,6 +278,10 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
   padding: 22px 24px;
   width: 460px;
   max-width: 92vw;
+  /* 设置弹窗加视频/组件区后可高于窗口（默认窗高 680）——超高弹窗自身滚动，
+     短内容弹窗不触发（max-height 不绑定），零影响 */
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   box-shadow: 0 18px 50px rgba(2, 6, 14, 0.55);
 }
 .modal h2 { margin: 0 0 6px; font-size: 15px; }
@@ -316,6 +320,24 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
   margin-top: 8px;
   overflow-wrap: anywhere;
 }
+
+/* 设置弹窗分区标题（HTTP 下载区之上无标题，视频下载/组件与 Cookie 用 h3 分隔） */
+.modal h3 {
+  margin: 22px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--mist);
+}
+/* 组件与 Cookie 区的操作行（版本行 / 浏览器选择行） */
+.settings-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+.settings-row span { flex: 1; }
+/* 行内 select 抵消 .modal select 的 width:100%，改为弹性占满剩余宽 */
+.settings-row select { width: auto; flex: 1; }
+.settings-note { font-size: 12px; color: var(--mist); line-height: 1.5; margin: 6px 0; }
+.settings-msg { font-size: 12px; margin-top: 6px; overflow-wrap: anywhere; }
 
 /* ── 视频链接提示 + 解析面板 ─────────────────────────── */
 

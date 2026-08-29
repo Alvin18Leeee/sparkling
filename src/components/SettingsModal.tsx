@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api';
-import type { ManagerConfig } from '../types';
+import type { ManagerConfig, YtdlpStatus } from '../types';
 
 export default function SettingsModal({
   config,
@@ -18,6 +18,51 @@ export default function SettingsModal({
   );
   const [autoResume, setAutoResume] = useState(config?.auto_resume_on_start ?? true);
   const [err, setErr] = useState<string | null>(null);
+  // 视频偏好（新增视频任务与"直接下载"的默认画质/字幕来源）
+  const [maxHeight, setMaxHeight] = useState(config?.video_max_height ?? 1080);
+  const [audioOnly, setAudioOnly] = useState(config?.video_audio_only ?? false);
+  const [subLangs, setSubLangs] = useState(config?.video_sub_langs ?? 'zh-Hans,en');
+  const [autoSubs, setAutoSubs] = useState(config?.video_auto_subs ?? false);
+  // 组件与 cookie 区
+  const [ytdlp, setYtdlp] = useState<YtdlpStatus | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [cookieBrowser, setCookieBrowser] = useState('edge');
+  // 失败走 .error 染色（与保存失败同款视觉），成功用中性 settings-msg
+  const [cookieMsg, setCookieMsg] = useState<{ text: string; isErr: boolean } | null>(null);
+
+  useEffect(() => {
+    api.getYtdlpStatus().then(setYtdlp).catch(() => {});
+  }, []);
+
+  const doUpdate = async () => {
+    setUpdating(true);
+    setCookieMsg(null);
+    try {
+      setYtdlp(await api.updateYtdlp());
+      setCookieMsg({ text: 'yt-dlp 更新完成', isErr: false });
+    } catch (e) {
+      setCookieMsg({ text: String(e), isErr: true });
+    } finally {
+      setUpdating(false);
+    }
+  };
+  const doImportCookies = async () => {
+    setUpdating(true);
+    setCookieMsg(null);
+    try {
+      await api.importCookies(cookieBrowser);
+      setCookieMsg({ text: 'Cookie 已导入', isErr: false });
+    } catch (e) {
+      setCookieMsg({ text: String(e), isErr: true });
+    } finally {
+      setUpdating(false);
+    }
+  };
+  const doClearCookies = async () => {
+    // 后端删文件忽略错误恒返回 Ok——清除语义上"没有 cookie"即目标态
+    await api.clearCookies().catch(() => {});
+    setCookieMsg({ text: 'Cookie 已清除', isErr: false });
+  };
 
   const save = async () => {
     const cfg: ManagerConfig = {
@@ -25,11 +70,13 @@ export default function SettingsModal({
       auto_resume_on_start: autoResume,
       global_speed_limit: limitKb > 0 ? limitKb * 1024 : null,
       default_segments: Math.max(1, Math.min(64, defaultSegments)),
-      // 视频偏好本弹窗不编辑——原样回传（config 为 null 时用后端同款默认值）
-      video_max_height: config?.video_max_height ?? null,
-      video_audio_only: config?.video_audio_only ?? false,
-      video_sub_langs: config?.video_sub_langs ?? 'zh-Hans,en',
-      video_auto_subs: config?.video_auto_subs ?? false,
+      // 互斥口径：仅音频时 max_height 存 null（selectorFromPreference 与播放列表
+      // 确认都依赖此语义）。cookie_file 由后端管理，前端不提交——后端 serde
+      // default 接 null，cookie 存在性即生效（见 Task 9），配置层不存路径
+      video_max_height: audioOnly ? null : maxHeight,
+      video_audio_only: audioOnly,
+      video_sub_langs: subLangs,
+      video_auto_subs: autoSubs,
     };
     try {
       await api.updateConfig(cfg);
@@ -57,6 +104,49 @@ export default function SettingsModal({
             onChange={(e) => setAutoResume(e.target.checked)} />
           重启后自动恢复未完成任务
         </label>
+
+        <h3>视频下载</h3>
+        <label>默认画质（最高分辨率）</label>
+        <select value={audioOnly ? 'audio' : String(maxHeight)}
+          onChange={(e) => {
+            if (e.target.value === 'audio') setAudioOnly(true);
+            else { setAudioOnly(false); setMaxHeight(Number(e.target.value)); }
+          }}>
+          <option value="2160">2160p（4K）</option>
+          <option value="1440">1440p</option>
+          <option value="1080">1080p</option>
+          <option value="720">720p</option>
+          <option value="480">480p</option>
+          <option value="audio">仅音频</option>
+        </select>
+        <label>字幕语言（逗号分隔，留空不下字幕）</label>
+        <input value={subLangs} onChange={(e) => setSubLangs(e.target.value)} />
+        <label className="checkbox">
+          <input type="checkbox" checked={autoSubs}
+            onChange={(e) => setAutoSubs(e.target.checked)} />
+          默认包含自动生成字幕（CC）
+        </label>
+
+        <h3>组件与 Cookie</h3>
+        <div className="settings-row">
+          <span>yt-dlp {ytdlp?.version ?? '…'}</span>
+          <button className="btn btn--sm" disabled={updating} onClick={doUpdate}>
+            {updating ? '处理中…' : '检查更新'}
+          </button>
+        </div>
+        <div className="settings-row">
+          <select value={cookieBrowser} onChange={(e) => setCookieBrowser(e.target.value)}>
+            <option value="edge">Edge</option>
+            <option value="chrome">Chrome</option>
+            <option value="firefox">Firefox</option>
+          </select>
+          <button className="btn btn--sm" disabled={updating} onClick={doImportCookies}>导入 Cookie</button>
+          <button className="btn btn--sm" onClick={doClearCookies}>清除</button>
+        </div>
+        <div className="settings-note">Cookie 文件保存在本机应用数据目录，仅用于视频解析下载；清除即删除文件。导入 Cookie 可解锁登录内容与会员画质。</div>
+        {cookieMsg && (
+          <div className={cookieMsg.isErr ? 'error' : 'settings-msg'}>{cookieMsg.text}</div>
+        )}
         {err && <div className="error">{err}</div>}
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>取消</button>
