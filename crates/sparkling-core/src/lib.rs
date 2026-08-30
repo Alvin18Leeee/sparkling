@@ -9,13 +9,14 @@ pub mod segment;
 pub mod store;
 pub mod task;
 pub mod throttle;
+pub mod video;
 
 pub use engine::{ControlMsg, Engine, ProgressSnapshot, SegmentProgress, TaskHandle};
 pub use error::{Result, SparklingError};
 pub use http_engine::{HttpEngine, RetryPolicy};
-pub use manager::{AddTaskOptions, ManagerConfig, TaskEvent, TaskManager};
+pub use manager::{AddTaskOptions, Engines, ManagerConfig, TaskEvent, TaskManager};
 pub use probe::{probe, ProbeResult};
 pub use segment::{split, take_over, Segment};
 pub use store::{TaskRecord, TaskStore};
-pub use task::{TaskId, TaskSpec, TaskState};
+pub use task::{TaskId, TaskKind, TaskSpec, TaskState, VideoMeta, VideoParams};
 pub use throttle::TokenBucket;

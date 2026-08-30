@@ -79,7 +79,7 @@ async fn probe_content_md5_present() {
 mod engine_tests {
     use crate::common::{sha256_hex, start, wait_state, FailMode, ServerConfig};
     use sparkling_core::engine::Engine;
-    use sparkling_core::task::{TaskSpec, TaskState};
+    use sparkling_core::task::{TaskKind, TaskSpec, TaskState};
     use std::time::Duration;
 
     async fn engine() -> sparkling_core::http_engine::HttpEngine {
@@ -93,6 +93,8 @@ mod engine_tests {
             filename: None,
             segments: 8,
             max_speed: None,
+            kind: TaskKind::Http,
+            video: None,
         }
     }
 

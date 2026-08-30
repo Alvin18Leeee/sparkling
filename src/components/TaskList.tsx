@@ -1,4 +1,5 @@
 import type { LiveInfo, TaskRecord } from '../types';
+import CollectionRow from './CollectionRow';
 import TaskRow from './TaskRow';
 
 export default function TaskList({
@@ -27,11 +28,33 @@ export default function TaskList({
       </div>
     );
   }
+  // 合集聚合：collection 非空的任务归为一组（组位置 = 组内最新任务的位置，
+  // 传入已按 created_at 倒序）；独立任务照常渲染
+  const rows: Array<{ kind: 'task'; task: TaskRecord } | { kind: 'collection'; name: string; items: TaskRecord[] }> =
+    [];
+  const grouped = new Map<string, { kind: 'collection'; name: string; items: TaskRecord[] }>();
+  for (const t of tasks) {
+    if (t.collection) {
+      let g = grouped.get(t.collection);
+      if (!g) {
+        g = { kind: 'collection', name: t.collection, items: [] };
+        grouped.set(t.collection, g);
+        rows.push(g);
+      }
+      g.items.push(t);
+    } else {
+      rows.push({ kind: 'task', task: t });
+    }
+  }
   return (
     <div className="task-list">
-      {tasks.map((t) => (
-        <TaskRow key={t.id} task={t} live={live.get(t.id)} onChanged={onChanged} />
-      ))}
+      {rows.map((r) =>
+        r.kind === 'task' ? (
+          <TaskRow key={r.task.id} task={r.task} live={live.get(r.task.id)} onChanged={onChanged} />
+        ) : (
+          <CollectionRow key={`c:${r.name}`} name={r.name} items={r.items} live={live} onChanged={onChanged} />
+        )
+      )}
     </div>
   );
 }

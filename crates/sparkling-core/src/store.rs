@@ -1,4 +1,4 @@
-use crate::task::TaskState;
+use crate::task::{TaskKind, TaskState, VideoMeta, VideoParams};
 use crate::{Result, SparklingError};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -18,6 +18,11 @@ pub struct TaskRecord {
     pub downloaded: u64,
     pub error: Option<String>,
     pub created_at: i64,
+    pub kind: TaskKind,
+    pub video: Option<VideoParams>,
+    pub video_meta: Option<VideoMeta>,
+    /// 所属合集名（播放列表批量任务）；None = 独立任务
+    pub collection: Option<String>,
 }
 
 pub struct TaskStore {
@@ -54,6 +59,33 @@ impl TaskStore {
             );",
         )
         .map_err(|e| SparklingError::Other(format!("初始化表失败: {e}")))?;
+        // v0→v1：③期视频任务列。user_version 幂等保护（重复打开不重复 ALTER）；
+        // 整批包进事务：DDL 与 user_version 均事务性，半途失败整体回滚，
+        // 库不会停在"kind 列已加而 user_version 仍 0"的卡死态
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(|e| SparklingError::Other(format!("读取库版本失败: {e}")))?;
+        if version < 1 {
+            conn.execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'http';
+                 ALTER TABLE tasks ADD COLUMN video_params TEXT;
+                 ALTER TABLE tasks ADD COLUMN video_meta TEXT;
+                 PRAGMA user_version = 1;
+                 COMMIT;",
+            )
+            .map_err(|e| SparklingError::Other(format!("迁移数据库失败: {e}")))?;
+        }
+        // v1→v2：播放列表合集列（批量任务归档目录 + 主界面聚合条目）
+        if version < 2 {
+            conn.execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE tasks ADD COLUMN collection TEXT;
+                 PRAGMA user_version = 2;
+                 COMMIT;",
+            )
+            .map_err(|e| SparklingError::Other(format!("迁移数据库失败: {e}")))?;
+        }
         Ok(Self { conn })
     }
 
@@ -61,8 +93,9 @@ impl TaskStore {
         self.conn
             .execute(
                 "INSERT INTO tasks (id, url, state, save_dir, filename, segments, max_speed,
-                                    total_size, downloaded, error, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                    total_size, downloaded, error, created_at,
+                                    kind, video_params, video_meta, collection)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     r.id,
                     r.url,
@@ -74,7 +107,11 @@ impl TaskStore {
                     r.total_size,
                     r.downloaded,
                     r.error,
-                    r.created_at
+                    r.created_at,
+                    r.kind.as_str(),
+                    video_params_json(r)?,
+                    video_meta_json(r)?,
+                    r.collection,
                 ],
             )
             .map_err(|e| SparklingError::Other(format!("插入失败: {e}")))?;
@@ -94,13 +131,28 @@ impl TaskStore {
             downloaded: row.get(8)?,
             error: row.get(9)?,
             created_at: row.get(10)?,
+            kind: TaskKind::parse(&row.get::<_, String>(11).unwrap_or_else(|_| "http".into()))
+                .unwrap_or(TaskKind::Http),
+            video: row
+                .get::<_, Option<String>>(12)
+                .ok()
+                .flatten()
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            video_meta: row
+                .get::<_, Option<String>>(13)
+                .ok()
+                .flatten()
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            collection: row.get(14)?,
         })
     }
 
     pub fn get(&self, id: &str) -> Result<Option<TaskRecord>> {
         self.conn
             .query_row(
-                "SELECT * FROM tasks WHERE id = ?1",
+                "SELECT id, url, state, save_dir, filename, segments, max_speed, total_size,
+                        downloaded, error, created_at, kind, video_params, video_meta, collection
+                 FROM tasks WHERE id = ?1",
                 params![id],
                 Self::row_to_record,
             )
@@ -112,7 +164,11 @@ impl TaskStore {
         // rowid DESC 次序决胜：同秒创建的任务列表顺序稳定（D34）
         let mut stmt = self
             .conn
-            .prepare("SELECT * FROM tasks ORDER BY created_at DESC, rowid DESC")
+            .prepare(
+                "SELECT id, url, state, save_dir, filename, segments, max_speed, total_size,
+                        downloaded, error, created_at, kind, video_params, video_meta, collection
+                 FROM tasks ORDER BY created_at DESC, rowid DESC",
+            )
             .map_err(|e| SparklingError::Other(format!("查询失败: {e}")))?;
         let rows = stmt
             .query_map([], Self::row_to_record)
@@ -163,6 +219,16 @@ impl TaskStore {
     }
 }
 
+fn video_params_json(r: &TaskRecord) -> Result<String> {
+    serde_json::to_string(&r.video)
+        .map_err(|e| SparklingError::Other(format!("序列化视频参数失败: {e}")))
+}
+
+fn video_meta_json(r: &TaskRecord) -> Result<String> {
+    serde_json::to_string(&r.video_meta)
+        .map_err(|e| SparklingError::Other(format!("序列化视频元数据失败: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +246,10 @@ mod tests {
             downloaded: 0,
             error: None,
             created_at: 1700000000,
+            kind: TaskKind::Http,
+            video: None,
+            video_meta: None,
+            collection: None,
         }
     }
 

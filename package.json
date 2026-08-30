@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "fetch:bin": "powershell -ExecutionPolicy Bypass -File scripts/fetch-bin.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

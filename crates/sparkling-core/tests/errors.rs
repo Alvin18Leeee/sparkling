@@ -3,7 +3,7 @@ mod common;
 use common::{sha256_hex, start, wait_state, FailMode, ServerConfig};
 use sparkling_core::engine::Engine;
 use sparkling_core::http_engine::{HttpEngine, RetryPolicy};
-use sparkling_core::task::{TaskSpec, TaskState};
+use sparkling_core::task::{TaskKind, TaskSpec, TaskState};
 use std::time::Duration;
 
 fn spec(url: String, dir: &tempfile::TempDir) -> TaskSpec {
@@ -13,6 +13,8 @@ fn spec(url: String, dir: &tempfile::TempDir) -> TaskSpec {
         filename: None,
         segments: 8,
         max_speed: None,
+        kind: TaskKind::Http,
+        video: None,
     }
 }
 

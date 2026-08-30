@@ -1,0 +1,16 @@
+{
+  "_type": "video",
+  "id": "dQW4w9WgXcQ",
+  "title": "测试视频 - 中文标题",
+  "duration": 212.136,
+  "thumbnail": "https://example.com/thumb.jpg",
+  "uploader": "测试上传者",
+  "webpage_url": "https://www.youtube.com/watch?v=dQW4w9WgXcQ",
+  "formats": [
+    { "format_id": "sb0", "ext": "mhtml", "height": 48, "vcodec": "vp9", "acodec": "none", "tbr": 20.5 },
+    { "format_id": "140", "ext": "m4a", "acodec": "mp4a.40.2", "vcodec": "none", "filesize": 3440000, "tbr": 129.8 },
+    { "format_id": "137", "ext": "mp4", "height": 1080, "fps": 25.0, "vcodec": "avc1.640028", "acodec": "none", "filesize": 45000000, "tbr": 2000.5 },
+    { "format_id": "18", "ext": "mp4", "height": 360, "fps": 25.0, "vcodec": "avc1.42001E", "acodec": "mp4a.40.2", "filesize": 9000000, "tbr": 390.2 },
+    { "format_id": "empty", "ext": "bin" }
+  ]
+}

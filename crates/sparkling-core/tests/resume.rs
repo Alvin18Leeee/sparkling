@@ -4,7 +4,7 @@ use common::{sha256_hex, start, wait_state, wait_until, ServerConfig};
 use sparkling_core::control_file;
 use sparkling_core::engine::Engine;
 use sparkling_core::http_engine::HttpEngine;
-use sparkling_core::task::{TaskSpec, TaskState};
+use sparkling_core::task::{TaskKind, TaskSpec, TaskState};
 use std::time::Duration;
 
 fn spec(url: String, dir: &tempfile::TempDir, max_speed: Option<u64>) -> TaskSpec {
@@ -14,6 +14,8 @@ fn spec(url: String, dir: &tempfile::TempDir, max_speed: Option<u64>) -> TaskSpe
         filename: None,
         segments: 8,
         max_speed,
+        kind: TaskKind::Http,
+        video: None,
     }
 }
 
