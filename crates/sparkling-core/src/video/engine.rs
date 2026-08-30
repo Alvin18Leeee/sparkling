@@ -211,12 +211,15 @@ pub fn cleanup_partial(save_dir: &Path, filename: &str) {
     }
 }
 
-/// 进度行应用到快照
+/// 进度行应用到快照。
+/// downloaded/total 单调钳制（只增不减）：分离流（bv+ba）的第二段（音频流）
+/// 进度行从 0 重涨，不钳制则进度条视觉回退；钳制后第二段期间停在 100%，
+/// 合并阶段由 merging 标签体现（无独立进度）。
 fn apply_line(snap: &mut ProgressSnapshot, line: &str) {
     if let Some(p) = parse_progress_line(line) {
-        snap.downloaded = p.downloaded;
+        snap.downloaded = snap.downloaded.max(p.downloaded);
         if let Some(t) = p.total {
-            snap.total = t;
+            snap.total = snap.total.max(t);
         }
         snap.speed = p.speed.unwrap_or(0);
     } else if is_merge_line(line) {
@@ -508,6 +511,31 @@ mod tests {
             );
             rx.changed().await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn progress_never_regresses_across_format_streams() {
+        // 分离流（bv+ba）：视频流下到 100% 后，音频流的进度行从 0 重涨——
+        // 不钳制则进度条视觉回退。钳制后 downloaded/total 只增不减。
+        let runner = Arc::new(FakeRunner::default());
+        runner.scripts.lock().unwrap().push_back(vec![
+            ScriptStep::Lines(&["SPARKLING|1000|1000|1000|500"]), // 视频流完成
+            ScriptStep::Lines(&["SPARKLING|10|300|300|100"]),     // 音频流从 0 重涨
+            ScriptStep::Lines(&["SPARKLING|300|300|300|100"]),    // 音频流完成
+            ScriptStep::Lines(&["[Merger] Merging formats into \"x.mp4\""]),
+            ScriptStep::Exit(0),
+        ]);
+        let eng = engine(runner);
+        let handle = eng.submit(video_spec(Path::new("D:\\dl"))).await.unwrap();
+        let mut rx = handle.subscribe();
+        wait_state(&mut rx, TaskState::Completed).await;
+        let snap = rx.borrow().clone();
+        assert_eq!(
+            snap.downloaded, 1000,
+            "第二段流的 downloaded 不得回退到小值"
+        );
+        assert_eq!(snap.total, 1000, "total 只增不减");
+        assert!(snap.merging);
     }
 
     #[tokio::test]
