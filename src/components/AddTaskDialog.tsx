@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import type { ManagerConfig, VideoInfo, VideoMeta } from '../types';
 import { looksLikeVideoUrl, selectorFromPreference } from '../types';
@@ -29,6 +29,22 @@ export default function AddTaskDialog({
   // 视频态：null=表单；'probing'=解析中；{ info }=解析结果面板
   const [video, setVideo] = useState<null | 'probing' | { info: VideoInfo }>(null);
   const isVideoUrl = looksLikeVideoUrl(url.trim());
+  // 已自动解析过的 URL：面板「返回」后不重复触发；解析失败不循环重试（手动按钮仍在）
+  const lastAutoProbedRef = useRef('');
+
+  // 视频链接自动解析：URL 成为视频链接且处于表单态时，防抖后直接进解析。
+  // 防抖避免打字中途的无效请求；URL 改变后可再次自动触发
+  useEffect(() => {
+    const u = url.trim();
+    if (!looksLikeVideoUrl(u) || video !== null || u === lastAutoProbedRef.current) return;
+    const t = setTimeout(() => {
+      lastAutoProbedRef.current = u;
+      probe();
+    }, 500);
+    return () => clearTimeout(t);
+    // probe 为当次渲染闭包（读取最新 url），无需进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, video]);
 
   const submit = async () => {
     if (!url.trim()) {
