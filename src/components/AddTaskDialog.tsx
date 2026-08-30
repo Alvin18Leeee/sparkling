@@ -165,6 +165,7 @@ export default function AddTaskDialog({
   return (
     <div className="modal-mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal__body">
         <h2>新建下载</h2>
         {video === 'probing' && <div className="video-panel__loading">正在解析视频信息…</div>}
         {video && video !== 'probing' ? (
@@ -224,6 +225,7 @@ export default function AddTaskDialog({
             </div>
           </>
         )}
+        </div>
       </div>
     </div>
   );

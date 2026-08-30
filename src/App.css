@@ -279,11 +279,14 @@ main {
   padding: 22px 24px;
   width: 460px;
   max-width: 92vw;
-  /* 设置弹窗加视频/组件区后可高于窗口（默认窗高 680）——超高弹窗自身滚动，
-     短内容弹窗不触发（max-height 不绑定），零影响 */
+  /* 外壳只管圆角裁切；滚动由内层 .modal__body 承担——滚动条贴 padding
+     内侧（22px），避开 14px 圆角区（WebView2 不用圆角裁切滚动条） */
+  overflow: hidden;
+  box-shadow: 0 18px 50px rgba(2, 6, 14, 0.55);
+}
+.modal__body {
   max-height: calc(100vh - 48px);
   overflow-y: auto;
-  box-shadow: 0 18px 50px rgba(2, 6, 14, 0.55);
 }
 .modal h2 { margin: 0 0 6px; font-size: 15px; }
 .modal label { display: block; font-size: 12px; color: var(--mist); margin: 13px 0 5px; }

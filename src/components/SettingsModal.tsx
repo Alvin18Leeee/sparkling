@@ -92,6 +92,7 @@ export default function SettingsModal({
   return (
     <div className="modal-mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal__body">
         <h2>设置</h2>
         <label>同时下载任务数（1–10）</label>
         <input type="number" min={1} max={10} value={maxConcurrent}
@@ -154,6 +155,7 @@ export default function SettingsModal({
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>取消</button>
           <button className="btn btn--primary" onClick={save}>保存</button>
+        </div>
         </div>
       </div>
     </div>
