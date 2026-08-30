@@ -14,10 +14,16 @@ export const api = {
   getConfig: () => invoke<ManagerConfig>('get_config'),
   updateConfig: (cfg: ManagerConfig) => invoke<void>('update_config', { cfg }),
   probeVideo: (url: string) => invoke<VideoInfo>('probe_video', { url }),
-  addVideoTask: (url: string, video: VideoParams, filename: string | null, videoMeta: VideoMeta | null) =>
+  addVideoTask: (
+    url: string,
+    video: VideoParams,
+    filename: string | null,
+    videoMeta: VideoMeta | null,
+    collection: string | null = null
+  ) =>
     invoke<string>('add_task', {
       url, filename, segments: null,
-      kind: 'video', video, videoMeta,
+      kind: 'video', video, videoMeta, collection,
     }),
   getYtdlpStatus: () => invoke<YtdlpStatus>('get_ytdlp_status'),
   updateYtdlp: () => invoke<YtdlpStatus>('update_ytdlp'),

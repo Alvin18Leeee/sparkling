@@ -65,6 +65,7 @@ export interface TaskRecord {
   kind: TaskKind;
   video: VideoParams | null;
   video_meta: VideoMeta | null;
+  collection: string | null;
 }
 
 export interface ManagerConfig {

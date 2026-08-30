@@ -95,6 +95,8 @@ export default function AddTaskDialog({
     try {
       const info = video.info;
       const targets = c.entries ?? [{ url: url.trim(), title: info.title }];
+      // 播放列表批量 → 合集：后端归档到 <下载目录>/<合集名>/，主界面聚合为一个条目
+      const collection = c.entries ? info.title : null;
       for (const t of targets) {
         // 单视频：probe 已取回完整元数据；播放列表条目（flat-playlist）只有
         // 标题可用，其余字段 null。TaskRow 的 video_meta?.title 分支由此激活
@@ -111,7 +113,8 @@ export default function AddTaskDialog({
           t.url,
           { format: c.format, subtitles: c.subtitles, auto_subs: c.auto_subs },
           t.title,
-          meta
+          meta,
+          collection
         );
       }
       onAdded();

@@ -123,6 +123,66 @@ main {
 
 .task-list { display: flex; flex-direction: column; gap: 12px; }
 
+/* ── 合集条目（播放列表批量任务聚合）─────────────────── */
+
+.collection {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 13px 16px 12px;
+  animation: rise 0.28s ease-out backwards;
+}
+.collection:hover { border-color: #2f4770; }
+.collection__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.collection__chevron {
+  flex: none;
+  color: var(--mist);
+  display: inline-block;
+  transition: transform 0.15s ease;
+  font-size: 14px;
+}
+.collection__chevron--open { transform: rotate(90deg); }
+.collection__name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.collection__count { font-size: 12px; color: var(--mist); flex: none; }
+.collection__pct {
+  font-family: var(--font-data);
+  font-size: 12px;
+  color: var(--mist);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.collection__state { font-size: 12px; color: var(--mist); flex: none; }
+.collection__meta { display: flex; margin-top: 7px; font-size: 12px; color: var(--mist); }
+/* 展开的子任务：左缩进标识归属，行间距收窄 */
+.collection__items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-left: 14px;
+  border-left: 2px solid var(--line);
+}
+
 /* ── 任务行 ───────────────────────────────────────────── */
 
 .task {
