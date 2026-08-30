@@ -254,7 +254,9 @@ async fn import_cookies(state: State<'_, AppState>, browser: String) -> Result<(
         .arg("--cookies")
         .arg(&state.video.cookie_file)
         .arg("--simulate")
-        .arg("https://www.youtube.com");
+        .arg("https://www.youtube.com")
+        // 中文 Windows 的 GBK stdout 编码防御（与 TokioChildRunner 同因，见其注释）
+        .env("PYTHONUTF8", "1");
     #[cfg(windows)]
     {
         // CREATE_NO_WINDOW：GUI 进程 spawn 控制台二进制不闪窗（与 runner/bin.rs 一致）

@@ -33,7 +33,9 @@ pub fn version_gt(a: &str, b: &str) -> bool {
 /// 跑 `yt-dlp --version`，取 stdout 首行
 pub async fn ytdlp_version(bin: &Path) -> Result<String> {
     let mut cmd = tokio::process::Command::new(bin);
-    cmd.arg("--version");
+    cmd.arg("--version")
+        // 中文 Windows 的 GBK stdout 编码防御（与 TokioChildRunner 同因，见其注释）
+        .env("PYTHONUTF8", "1");
     #[cfg(windows)]
     {
         // CREATE_NO_WINDOW：GUI 进程 spawn 控制台二进制不闪窗，与 TokioChildRunner 一致

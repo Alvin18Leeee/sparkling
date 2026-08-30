@@ -82,6 +82,10 @@ impl YtDlpRunner for TokioChildRunner {
         cmd.args(&args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            // 中文 Windows：无控制台的管道 stdout 会让 Python 选 GBK 编码，
+            // yt-dlp 输出含非 ASCII 行（目标文件名等）时报 [Errno 22] 退出 120
+            // （真机验收 BV13ZKdzCEnf 复现）。UTF-8 模式（PEP 540）强制全 IO 走 UTF-8
+            .env("PYTHONUTF8", "1")
             // abort/泄漏兜底：句柄 drop 即杀进程
             .kill_on_drop(true);
         #[cfg(windows)]
@@ -98,21 +102,32 @@ impl YtDlpRunner for TokioChildRunner {
         let done = tokio::spawn(async move {
             let mut child = child;
             let mut killed = None;
+            // stderr 有损读取：子进程在无控制台管道下可能以 GBK 编码输出
+            // （中文 Windows 默认 ANSI 代码页），严格 UTF-8 解码会提前 Err 丢数据
             let stderr_task = tokio::spawn(async move {
                 use tokio::io::AsyncReadExt;
-                let mut buf = String::new();
+                let mut buf = Vec::new();
                 let mut stderr = stderr;
-                let _ = stderr.read_to_string(&mut buf).await;
-                buf
+                let _ = stderr.read_to_end(&mut buf).await;
+                String::from_utf8_lossy(&buf).into_owned()
             });
             {
-                use tokio::io::AsyncBufReadExt;
-                let mut lines = tokio::io::BufReader::new(stdout).lines();
+                // stdout 按字节读行 + 有损解码：严格 UTF-8 的 lines() 遇 GBK 字节
+                // 返回 Err，若据此 break 会丢弃读端——子进程继续写管道在 Windows 上
+                // 得到 EINVAL（WriteFile），yt-dlp 报 [Errno 22] 退出 120
+                // （真机验收 BV13ZKdzCEnf 复现）。有损解码永不断管。
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let mut reader = BufReader::new(stdout);
+                let mut raw = Vec::new();
                 loop {
+                    raw.clear();
                     tokio::select! {
-                        line = lines.next_line() => match line {
-                            Ok(Some(l)) => on_line(&l),
-                            Ok(None) => break,
+                        r = reader.read_until(b'\n', &mut raw) => match r {
+                            Ok(0) => break, // EOF
+                            Ok(_) => {
+                                let line = String::from_utf8_lossy(&raw);
+                                on_line(line.trim_end());
+                            }
                             Err(_) => break,
                         },
                         r = kill_rx.recv() => {
