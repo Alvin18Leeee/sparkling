@@ -2,15 +2,25 @@ mod common;
 
 use common::{poll_until, sha256_hex, start, wait_event_state, ServerConfig};
 use sparkling_core::http_engine::{HttpEngine, RetryPolicy};
-use sparkling_core::manager::{AddTaskOptions, ManagerConfig, TaskEvent, TaskManager};
-use sparkling_core::task::TaskState;
+use sparkling_core::manager::{AddTaskOptions, Engines, ManagerConfig, TaskEvent, TaskManager};
+use sparkling_core::task::{TaskKind, TaskState};
+use sparkling_core::video::engine::VideoEngine;
+use sparkling_core::video::runner::FakeRunner;
 use std::sync::Arc;
 use std::time::Duration;
 
 fn manager(dir: &tempfile::TempDir, cfg: ManagerConfig) -> TaskManager {
     TaskManager::new(
         &dir.path().join("tasks.db"),
-        Arc::new(HttpEngine::new_with_policy(None, RetryPolicy::fast())),
+        Engines {
+            http: Arc::new(HttpEngine::new_with_policy(None, RetryPolicy::fast())),
+            // video 引擎空载即可：本测试文件不跑视频任务
+            video: Arc::new(VideoEngine::new(
+                Arc::new(FakeRunner::default()),
+                None,
+                None,
+            )),
+        },
         cfg,
         tokio::runtime::Handle::current(),
     )
@@ -23,6 +33,10 @@ fn opts(dir: &tempfile::TempDir, max_speed: Option<u64>) -> AddTaskOptions {
         filename: None,
         segments: Some(4),
         max_speed,
+        kind: TaskKind::Http,
+        video: None,
+        video_meta: None,
+        collection: None,
     }
 }
 
@@ -297,13 +311,7 @@ async fn recovery_auto_resumes() {
     assert!(dir.path().join("file.bin.sparkling").exists());
 
     // 重启：同一数据库 + 新引擎 → 自动恢复
-    let m2 = TaskManager::new(
-        &dir.path().join("tasks.db"),
-        Arc::new(HttpEngine::new_with_policy(None, RetryPolicy::fast())),
-        ManagerConfig::default(),
-        tokio::runtime::Handle::current(),
-    )
-    .unwrap();
+    let m2 = manager(&dir, ManagerConfig::default());
     let mut rx = m2.subscribe();
     m2.recover().unwrap();
     // 重启后只有一个任务，直接等待任意 Completed 事件
@@ -472,12 +480,18 @@ async fn add_task_works_off_runtime_thread() {
     let url = server.url.clone();
     let save_dir = dir.path().to_path_buf();
     let db = dir.path().join("tasks.db");
-    let engine: std::sync::Arc<dyn sparkling_core::engine::Engine> =
-        std::sync::Arc::new(HttpEngine::new_with_policy(None, RetryPolicy::fast()));
+    let engines = Engines {
+        http: Arc::new(HttpEngine::new_with_policy(None, RetryPolicy::fast())),
+        video: Arc::new(VideoEngine::new(
+            Arc::new(FakeRunner::default()),
+            None,
+            None,
+        )),
+    };
     // 构造 + add_task 全在裸线程上完成；manager 一并带回（同一条 store 连接
     // 观察完成态，避免第二个连接碰 SQLite 锁）
     let (m, id) = std::thread::spawn(move || {
-        let m = TaskManager::new(&db, engine, ManagerConfig::default(), handle).unwrap();
+        let m = TaskManager::new(&db, engines, ManagerConfig::default(), handle).unwrap();
         let id = m
             .add_task(
                 url,
@@ -486,6 +500,10 @@ async fn add_task_works_off_runtime_thread() {
                     filename: None,
                     segments: Some(2),
                     max_speed: None,
+                    kind: TaskKind::Http,
+                    video: None,
+                    video_meta: None,
+                    collection: None,
                 },
             )
             .unwrap();

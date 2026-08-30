@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { api } from './api';
-import type { LiveInfo, ManagerConfig, TaskEvent, TaskRecord } from './types';
+import type { LiveInfo, ManagerConfig, TaskEvent, TaskRecord, YtdlpStatus } from './types';
 import { fmtBytes } from './types';
 import AddTaskDialog from './components/AddTaskDialog';
 import SettingsModal from './components/SettingsModal';
@@ -23,6 +23,8 @@ export default function App() {
   const [live, setLive] = useState<Map<string, LiveInfo>>(new Map());
   const pendingLive = useRef<Map<string, LiveInfo>>(new Map());
   const [config, setConfig] = useState<ManagerConfig | null>(null);
+  // 视频工具链状态（yt-dlp/ffmpeg 可用性——解析面板用它提示"需 ffmpeg，缺失"档位）
+  const [ytdlpStatus, setYtdlpStatus] = useState<YtdlpStatus | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -52,6 +54,7 @@ export default function App() {
   useEffect(() => {
     refresh();
     api.getConfig().then(setConfig).catch(() => {});
+    api.getYtdlpStatus().then(setYtdlpStatus).catch(() => {});
     // Progress 事件（后端 250ms 节奏）先进缓冲，按 1s 节拍统一上屏——
     // 视觉更新周期 1 秒，数字与进度条不闪烁；State 事件即时对账 + 2s 轮询兜底
     const un = listen<TaskEvent>('task-event', (ev) => {
@@ -62,6 +65,7 @@ export default function App() {
           total: p.total,
           speed: p.speed,
           segments: p.segments,
+          merging: p.merging,
         });
       } else {
         if (p.state !== 'running') {
@@ -125,6 +129,10 @@ export default function App() {
       {showAdd && (
         <AddTaskDialog
           defaultSegments={config?.default_segments ?? 8}
+          ffmpegAvailable={ytdlpStatus?.ffmpeg_available ?? true}
+          defaultSubLangs={config?.video_sub_langs ?? 'zh-Hans,en'}
+          defaultAutoSubs={config?.video_auto_subs ?? false}
+          preference={config}
           onClose={() => setShowAdd(false)}
           onAdded={() => {
             setShowAdd(false);

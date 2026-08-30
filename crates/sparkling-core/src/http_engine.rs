@@ -2,7 +2,7 @@ use crate::control_file;
 use crate::engine::{ControlMsg, Engine, ProgressSnapshot, SegmentProgress, TaskHandle};
 use crate::probe::{self, ProbeResult};
 use crate::segment::Segment;
-use crate::task::{TaskId, TaskSpec, TaskState};
+use crate::task::{TaskId, TaskKind, TaskSpec, TaskState};
 use crate::throttle::TokenBucket;
 use crate::{Result, SparklingError};
 use async_trait::async_trait;
@@ -249,6 +249,9 @@ impl Drop for HttpEngine {
 #[async_trait]
 impl Engine for HttpEngine {
     async fn submit(&self, spec: TaskSpec) -> Result<TaskHandle> {
+        if spec.kind != TaskKind::Http {
+            return Err(SparklingError::Other("HttpEngine 收到非 HTTP 任务".into()));
+        }
         let id: TaskId = uuid::Uuid::new_v4().to_string();
         let (progress_tx, progress_rx) = watch::channel(ProgressSnapshot {
             state: TaskState::Running,
@@ -258,6 +261,7 @@ impl Engine for HttpEngine {
             segments: vec![],
             error: None,
             filename: None, // 探测完成后由 reporter 帧携带（D35）
+            merging: false,
         });
         let (control_tx, control_rx) = mpsc::unbounded_channel();
         let join = tokio::spawn(supervise(
@@ -694,7 +698,8 @@ fn part_path_for(final_path: &Path) -> PathBuf {
 
 /// 清洗文件名：剥离路径分隔符/驱动器前缀/点组件与 Windows 保留设备名，
 /// 非法或空时回退 "download"。防止 Content-Disposition / URL 注入路径穿越（I3）。
-fn sanitize_filename(name: &str) -> String {
+/// pub：③期视频标题清洗复用（VideoEngine 上游构造 spec 前统一消毒）。
+pub fn sanitize_filename(name: &str) -> String {
     // 取最后一个路径组件（兼容 \ 与 /）
     let base = name.rsplit(['\\', '/']).next().unwrap_or("").trim();
     // 剥离 Windows 驱动器前缀（形如 "C:"）与残留冒号
@@ -752,6 +757,7 @@ fn spawn_reporter(
                     segments: shared.snapshot_segments(),
                     error: None,
                     filename: Some(shared.filename.clone()),
+                    merging: false,
                 });
                 break;
             }
@@ -787,6 +793,7 @@ fn spawn_reporter(
                     segments: shared.snapshot_segments(),
                     error: None,
                     filename: Some(shared.filename.clone()),
+                    merging: false,
                 })
                 .is_err()
             {

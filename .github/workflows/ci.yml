@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # develop = 集成分支：合入即跑质量门；main = 可发布线（发版最后防线）
+    branches: [main, develop]
   pull_request:
 
 # 同分支新推送自动取消旧运行（省额度）
@@ -42,6 +43,8 @@ jobs:
         run: |
           npm install
           npm run build
+      - name: 下载外部二进制（tauri resources：build.rs 构建期需存在）
+        run: npm run fetch:bin
       - name: Clippy（全 workspace，含 cfg(windows) 的 DWM 代码）
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: 全量编译（真实链接验证：tauri 壳 + exe 资源嵌入）

@@ -3,7 +3,7 @@
 use crate::control_file;
 use crate::engine::{Engine, TaskHandle};
 use crate::store::{TaskRecord, TaskStore};
-use crate::task::{TaskId, TaskSpec, TaskState};
+use crate::task::{TaskId, TaskKind, TaskSpec, TaskState, VideoMeta, VideoParams};
 use crate::{Result, SparklingError};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -18,6 +18,16 @@ pub struct ManagerConfig {
     pub auto_resume_on_start: bool,
     pub global_speed_limit: Option<u64>,
     pub default_segments: u32,
+    #[serde(default)]
+    pub video_max_height: Option<u32>,
+    #[serde(default)]
+    pub video_audio_only: bool,
+    #[serde(default = "default_sub_langs")]
+    pub video_sub_langs: String,
+    #[serde(default)]
+    pub video_auto_subs: bool,
+    #[serde(default)]
+    pub cookie_file: Option<std::path::PathBuf>,
 }
 
 impl Default for ManagerConfig {
@@ -27,8 +37,17 @@ impl Default for ManagerConfig {
             auto_resume_on_start: true,
             global_speed_limit: None,
             default_segments: 8,
+            video_max_height: None,
+            video_audio_only: false,
+            video_sub_langs: default_sub_langs(),
+            video_auto_subs: false,
+            cookie_file: None,
         }
     }
+}
+
+fn default_sub_langs() -> String {
+    "zh-Hans,en".into()
 }
 
 /// 推送给 UI 的事件流（broadcast：晚订阅者只看新事件，不回放）
@@ -47,6 +66,7 @@ pub enum TaskEvent {
         total: u64,
         speed: u64,
         segments: Vec<crate::engine::SegmentProgress>,
+        merging: bool,
     },
 }
 
@@ -56,11 +76,32 @@ pub struct AddTaskOptions {
     pub filename: Option<String>,
     pub segments: Option<u32>,
     pub max_speed: Option<u64>,
+    pub kind: TaskKind,
+    pub video: Option<VideoParams>,
+    /// 所属合集名（播放列表批量任务）；save_dir 由调用方拼好合集子目录
+    pub collection: Option<String>,
+    pub video_meta: Option<VideoMeta>,
+}
+
+/// 引擎路由表：TaskKind → Engine（③期多引擎接入点）
+#[derive(Clone)]
+pub struct Engines {
+    pub http: Arc<dyn Engine>,
+    pub video: Arc<dyn Engine>,
+}
+
+impl Engines {
+    pub fn for_kind(&self, kind: TaskKind) -> Arc<dyn Engine> {
+        match kind {
+            TaskKind::Http => self.http.clone(),
+            TaskKind::Video => self.video.clone(),
+        }
+    }
 }
 
 #[derive(Clone)]
 struct Inner {
-    engine: Arc<dyn Engine>,
+    engines: Engines,
     store: Arc<Mutex<TaskStore>>,
     config: Arc<Mutex<ManagerConfig>>,
     handles: Arc<Mutex<HashMap<TaskId, TaskHandle>>>,
@@ -85,7 +126,7 @@ impl TaskManager {
     /// 落到运行时上，而非假设调用线程有 ambient runtime（C1）
     pub fn new(
         store_path: &std::path::Path,
-        engine: Arc<dyn Engine>,
+        engines: Engines,
         config: ManagerConfig,
         runtime: tokio::runtime::Handle,
     ) -> Result<Self> {
@@ -93,7 +134,7 @@ impl TaskManager {
         let (events, _) = broadcast::channel(1024);
         Ok(Self {
             inner: Arc::new(Inner {
-                engine,
+                engines,
                 store: Arc::new(Mutex::new(store)),
                 config: Arc::new(Mutex::new(config)),
                 handles: Arc::new(Mutex::new(HashMap::new())),
@@ -119,27 +160,42 @@ impl TaskManager {
         cfg.max_concurrent = cfg.max_concurrent.clamp(1, 10);
         cfg.default_segments = cfg.default_segments.clamp(1, 64);
         *self.inner.config.lock().unwrap() = cfg;
-        self.inner
-            .engine
-            .set_speed_limit(self.inner.config.lock().unwrap().global_speed_limit);
+        let limit = self.inner.config.lock().unwrap().global_speed_limit;
+        self.inner.engines.http.set_speed_limit(limit);
+        self.inner.engines.video.set_speed_limit(limit);
         // 调大 max_concurrent 时立即把排队任务提上来
         try_schedule(&self.inner);
     }
 
     pub fn add_task(&self, url: String, opts: AddTaskOptions) -> Result<TaskId> {
         let id = uuid::Uuid::new_v4().to_string();
-        let segments = opts
+        let mut segments = opts
             .segments
             .unwrap_or(self.config().default_segments)
             .clamp(1, 64);
+        // 视频任务无分片概念（yt-dlp 内部管理），固定存 1
+        if opts.kind == TaskKind::Video {
+            segments = 1;
+        }
+        // 视频文件名来自远端标题（probe 的 t.title，攻击者可控）："C:\evil" 会让
+        // 引擎侧 PathBuf::join 整体替换 save_dir（写任意盘符），"a/b" 会静默建
+        // 子目录——入队前消毒。HTTP 路径在引擎内已消毒，此处只拦视频分支
+        let filename = match (opts.kind, opts.filename) {
+            (TaskKind::Video, Some(name)) => Some(crate::http_engine::sanitize_filename(&name)),
+            (_, filename) => filename,
+        };
         let rec = TaskRecord {
             id: id.clone(),
             url,
             state: TaskState::Queued,
             save_dir: opts.save_dir.display().to_string(),
-            filename: opts.filename.clone(),
+            filename,
             segments,
             max_speed: opts.max_speed,
+            kind: opts.kind,
+            video: opts.video,
+            video_meta: opts.video_meta,
+            collection: opts.collection,
             total_size: None,
             downloaded: 0,
             error: None,
@@ -229,9 +285,10 @@ impl TaskManager {
         Ok(())
     }
 
-    /// 删除任务记录。有句柄（引擎在跑）→ 引擎取消路径自会清理 ctl/.part；
-    /// 无句柄（排队/重启残留的 Paused 等）→ 残留文件没人管，之后同 URL
-    /// 重新添加会静默从旧控制文件续传——这里补删（M2）。
+    /// 删除任务记录。有句柄（引擎在跑）→ 引擎取消路径自会清理残留
+    /// （HTTP：ctl/.part；视频：yt-dlp .part/分片）；无句柄（排队/重启残留的
+    /// Paused 等）→ 残留文件没人管，之后同 URL 重新添加会静默从旧文件续传
+    /// ——这里按 kind 补删（M2）。
     pub fn remove_task(&self, id: &str) -> Result<()> {
         let handle = self.inner.handles.lock().unwrap().get(id).cloned();
         if let Some(h) = &handle {
@@ -244,13 +301,23 @@ impl TaskManager {
         if handle.is_none() {
             if let Some(rec) = rec {
                 if let Some(name) = rec.filename {
-                    let final_path = PathBuf::from(&rec.save_dir).join(&name);
-                    let ctl = control_file::path_for(&final_path);
-                    // .part 命名镜像 http_engine::part_path_for（<名>.sparkling.part）
-                    let mut part = final_path.into_os_string();
-                    part.push(".sparkling.part");
-                    let _ = std::fs::remove_file(&ctl);
-                    let _ = std::fs::remove_file(&part);
+                    match rec.kind {
+                        TaskKind::Video => {
+                            crate::video::engine::cleanup_partial(
+                                &PathBuf::from(&rec.save_dir),
+                                &name,
+                            );
+                        }
+                        TaskKind::Http => {
+                            let final_path = PathBuf::from(&rec.save_dir).join(&name);
+                            let ctl = control_file::path_for(&final_path);
+                            // .part 命名镜像 http_engine::part_path_for（<名>.sparkling.part）
+                            let mut part = final_path.into_os_string();
+                            part.push(".sparkling.part");
+                            let _ = std::fs::remove_file(&ctl);
+                            let _ = std::fs::remove_file(&part);
+                        }
+                    }
                 }
             }
         }
@@ -285,8 +352,9 @@ impl TaskManager {
         self.inner.store.lock().unwrap().get_all()
     }
 
-    /// 重启恢复：Queued 直接入队；Running/Paused 校验控制文件后
-    /// 按配置自动恢复（重新排队，引擎续传）或保持 Paused；损坏 → Failed。
+    /// 重启恢复：Queued 直接入队；Running/Paused 的视频任务直接按配置恢复
+    /// （yt-dlp -c 从 .part 续传，无控制文件校验）或保持 Paused；HTTP 任务
+    /// 校验控制文件后按配置自动恢复或保持 Paused，损坏 → Failed。
     pub fn recover(&self) -> Result<()> {
         let cfg = self.config();
         let recs = self.inner.store.lock().unwrap().get_all()?;
@@ -297,6 +365,21 @@ impl TaskManager {
                     self.inner.queue.lock().unwrap().push_back(rec.id.clone());
                 }
                 TaskState::Running | TaskState::Paused => {
+                    if rec.kind == TaskKind::Video {
+                        // 视频任务：yt-dlp .part 续传，无控制文件概念
+                        if cfg.auto_resume_on_start {
+                            to_resume.push(rec.id.clone());
+                        } else {
+                            // 不自动恢复：保持 Paused（无句柄，resume 时重新排队）
+                            self.inner.store.lock().unwrap().update_state(
+                                &rec.id,
+                                TaskState::Paused,
+                                None,
+                            )?;
+                            self.emit_state(&rec.id, TaskState::Paused, None);
+                        }
+                        continue;
+                    }
                     let ctl_ok = rec.filename.as_ref().and_then(|f| {
                         let p = control_file::path_for(&PathBuf::from(&rec.save_dir).join(f));
                         control_file::exists(&p).then_some(p)
@@ -333,10 +416,11 @@ impl TaskManager {
         Ok(())
     }
 
-    /// 应用退出：关停引擎、清理句柄
+    /// 应用退出：关停全部引擎、清理句柄
     pub fn shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
-        self.inner.engine.shutdown();
+        self.inner.engines.http.shutdown();
+        self.inner.engines.video.shutdown();
         self.inner.handles.lock().unwrap().clear();
         self.inner.queue.lock().unwrap().clear();
     }
@@ -391,13 +475,16 @@ fn try_schedule(inner: &Arc<Inner>) {
             filename: rec.filename.clone(),
             segments: rec.segments,
             max_speed: rec.max_speed,
+            kind: rec.kind,
+            video: rec.video.clone(),
         };
+        let engine = inner.engines.for_kind(rec.kind);
         inner.active.fetch_add(1, Ordering::SeqCst);
         let inner2 = inner.clone();
         // C1：经注入的 Handle spawn——本函数会被 Tauri 同步命令（无 ambient
         // runtime 的 WebView2 COM 回调线程）直接调用，裸 tokio::spawn 会 panic
         inner.runtime.spawn(async move {
-            match inner2.engine.submit(spec).await {
+            match engine.submit(spec).await {
                 Ok(handle) => {
                     inner2
                         .handles
@@ -466,6 +553,7 @@ async fn monitor_task(inner: Arc<Inner>, id: TaskId, handle: TaskHandle) {
             total: snap.total,
             speed: snap.speed,
             segments: snap.segments.clone(),
+            merging: snap.merging,
         });
         if snap.state != prev {
             let was_running = prev == TaskState::Running;

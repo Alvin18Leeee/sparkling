@@ -1,6 +1,6 @@
 [package]
 name = "sparkling"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Sparkling 下载器"
 
@@ -15,9 +15,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# 事件转发循环中按 variant 匹配 tokio broadcast 的 RecvError（Lagged/Closed），
-# 需要作为直接依赖才能引用该类型；sparkling-core 已启用 full，无额外编译成本
-tokio = { version = "1", features = ["sync"] }
+# 事件转发（broadcast RecvError 按变体匹配）、probe_video 三臂 select!/pin!
+# （macros）+ 60s sleep（time）、import_cookies 一次性进程调用（process）——
+# 均需作为直接依赖引用；sparkling-core 已启用 full，特性并集下无额外编译成本
+tokio = { version = "1", features = ["sync", "macros", "time", "process"] }
 sparkling-core = { path = "../crates/sparkling-core" }
 
 [target.'cfg(windows)'.dependencies]

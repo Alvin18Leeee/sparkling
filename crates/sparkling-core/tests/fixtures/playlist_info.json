@@ -1,0 +1,11 @@
+{
+  "_type": "playlist",
+  "id": "PLtest",
+  "title": "测试播放列表",
+  "webpage_url": "https://www.youtube.com/playlist?list=PLtest",
+  "entries": [
+    { "id": "v1", "title": "第一集", "url": "https://www.youtube.com/watch?v=v1", "duration": 100.5 },
+    { "id": "v2", "title": "第二集", "url": "https://www.youtube.com/watch?v=v2" },
+    { "id": "bad", "title": "无URL条目" }
+  ]
+}

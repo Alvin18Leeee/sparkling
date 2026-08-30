@@ -21,6 +21,8 @@ pub struct ProgressSnapshot {
     pub error: Option<String>,
     /// 引擎解析出的最终文件名（探测前 None；manager 落库供重启恢复/UI 展示）
     pub filename: Option<String>,
+    /// 视频任务：下载完成后合并中（HTTP 任务恒 false；segments 恒空数组）
+    pub merging: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
