@@ -251,9 +251,15 @@ async fn get_ytdlp_status(state: State<'_, AppState>) -> Result<YtdlpStatus, Str
 async fn update_ytdlp(state: State<'_, AppState>) -> Result<YtdlpStatus, String> {
     const YTDLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
     let dest = state.video.app_bin_dir.join("yt-dlp.exe");
-    vbin::download_replace(YTDLP_URL, &dest)
-        .await
-        .map_err(|e| e.user_message())?;
+    // 总超时兜底（5 分钟）：慢网允许慢慢下（17MB @100KB/s≈3 分钟），
+    // 但保证前端 promise 最终必有结果，不再无限"处理中"
+    tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        vbin::download_replace(YTDLP_URL, &dest),
+    )
+    .await
+    .map_err(|_| "下载超时（5 分钟）：请检查网络后重试".to_string())?
+    .map_err(|e| e.user_message())?;
     get_ytdlp_status(state).await
 }
 

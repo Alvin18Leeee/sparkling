@@ -54,9 +54,12 @@ pub async fn ytdlp_version(bin: &Path) -> Result<String> {
 
 /// 下载到 dest.tmp 后原子 rename 到 dest
 pub async fn download_replace(url: &str, dest: &Path) -> Result<()> {
-    // 只限连接建立（不限总时长——大文件下载可能需要数分钟，总 timeout 会掐断）
+    // connect_timeout 限连接建立；read_timeout 限两次读之间——不限总时长
+    // （大文件慢网允许慢慢下），但完全停滞的连接（GitHub 直连在国内网络
+    // 常见"连上但不动"）30 秒报错，不再无限挂起（真机验收复现"始终处理中"）
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
+        .read_timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| SparklingError::Other(format!("构建 HTTP 客户端失败: {e}")))?;
     let resp = client
