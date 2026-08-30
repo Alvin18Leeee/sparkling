@@ -285,12 +285,13 @@ main {
   box-shadow: 0 18px 50px rgba(2, 6, 14, 0.55);
 }
 .modal__body {
-  max-height: calc(100vh - 48px);
+  /* 上下负 8px（22→14px，限位恰在圆角边界，用尽空间）+ 右负 24px（贴框）；
+     padding 补回内容侧原视觉边距。max-height 使 modal 总高保持 100vh-48：
+     body(100vh-76) + 上下 14px*2 + 左右结构 = 100vh - 48 */
+  max-height: calc(100vh - 76px);
   overflow-y: auto;
-  /* 贴边限位：负 margin 抵消 modal 右 padding → 滚动条贴右框（内容侧补回）；
-     上下端天然停在 modal 22px padding 处——已避开 14px 圆角区 */
-  margin-right: -24px;
-  padding-right: 24px;
+  margin: -8px -24px -8px 0;
+  padding: 8px 24px 8px 0;
 }
 .modal h2 { margin: 0 0 6px; font-size: 15px; }
 .modal label { display: block; font-size: 12px; color: var(--mist); margin: 13px 0 5px; }
