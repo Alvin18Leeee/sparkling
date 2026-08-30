@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { api } from '../api';
 import type { LiveInfo, TaskRecord } from '../types';
 import { fmtBytes } from '../types';
 import TaskRow from './TaskRow';
@@ -45,6 +46,14 @@ export default function CollectionRow({
       : failed > 0
         ? `部分失败 · ${completed}/${items.length}`
         : `排队中 · ${completed}/${items.length}`;
+  // 全组取消：未完成子任务逐个取消（已终态的跳过）
+  const unfinished = items.filter((t) => t.state !== 'completed' && t.state !== 'cancelled');
+  const cancelAll = async () => {
+    for (const t of unfinished) {
+      await api.cancelTask(t.id).catch(() => {});
+    }
+    onChanged();
+  };
 
   return (
     <div className={`collection collection--${allDone ? 'completed' : 'active'}`}>
@@ -56,6 +65,19 @@ export default function CollectionRow({
         <span className="collection__count">{items.length} 项</span>
         <span className="collection__pct">{pct}%</span>
         <span className="collection__state">{label}</span>
+        {!allDone && (
+          <span className="collection__actions">
+            <button
+              className="btn btn--sm"
+              onClick={(e) => {
+                e.stopPropagation(); // 别触发头部展开/收起
+                void cancelAll();
+              }}
+            >
+              全部取消
+            </button>
+          </span>
+        )}
       </button>
       <div className="task__bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
         <div className="task__bar-fill" style={{ width: `${pct}%` }} />

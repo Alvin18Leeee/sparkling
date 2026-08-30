@@ -172,6 +172,7 @@ main {
   flex: none;
 }
 .collection__state { font-size: 12px; color: var(--mist); flex: none; }
+.collection__actions { flex: none; display: flex; }
 .collection__meta { display: flex; margin-top: 7px; font-size: 12px; color: var(--mist); }
 /* 展开的子任务：左缩进标识归属，行间距收窄 */
 .collection__items {
