@@ -130,7 +130,7 @@ export default function VideoInfoPanel({
           <div className="video-panel__sub">
             {info.uploader && <span>{info.uploader} · </span>}
             <span>{fmtDuration(info.duration_sec)}</span>
-            {isPlaylist && <span> · 共 {info.playlist!.length} 集（已选 {selected.size}）</span>}
+            {isPlaylist && <span> · 共 {info.playlist!.length} 集</span>}
           </div>
         </div>
       </div>

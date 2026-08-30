@@ -127,9 +127,9 @@ export function looksLikeVideoUrl(url: string): boolean {
   }
 }
 
-/** 秒 → "1:23:45" / "12:34" */
+/** 秒 → "1:23:45" / "12:34"；缺失 → "时长未知" */
 export function fmtDuration(sec: number | null | undefined): string {
-  if (sec == null || sec <= 0) return '—';
+  if (sec == null || sec <= 0) return '时长未知';
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = Math.floor(sec % 60);
