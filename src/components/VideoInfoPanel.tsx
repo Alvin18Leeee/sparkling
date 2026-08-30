@@ -136,7 +136,8 @@ export default function VideoInfoPanel({
       </div>
 
       {isPlaylist && (
-        <div className="video-panel__list">
+        <div className="video-panel__list-wrap">
+          {/* 全选栏在滚动区外——留白恒定（不随滚动变化），天然固定在顶部 */}
           <label className="video-panel__selectall">
             <input
               type="checkbox"
@@ -151,21 +152,23 @@ export default function VideoInfoPanel({
             />
             全选（{selected.size}/{info.playlist!.length}）
           </label>
-          {(info.playlist ?? []).map((e, i) => (
-            <label key={i} className="video-panel__entry">
-              <input
-                type="checkbox"
-                checked={selected.has(i)}
-                onChange={(ev) => {
-                  const next = new Set(selected);
-                  if (ev.target.checked) next.add(i); else next.delete(i);
-                  setSelected(next);
-                }}
-              />
-              <span className="video-panel__entry-title" title={e.title}>{e.title}</span>
-              <span className="video-panel__entry-dur">{fmtDuration(e.duration_sec)}</span>
-            </label>
-          ))}
+          <div className="video-panel__list">
+            {(info.playlist ?? []).map((e, i) => (
+              <label key={i} className="video-panel__entry">
+                <input
+                  type="checkbox"
+                  checked={selected.has(i)}
+                  onChange={(ev) => {
+                    const next = new Set(selected);
+                    if (ev.target.checked) next.add(i); else next.delete(i);
+                    setSelected(next);
+                  }}
+                />
+                <span className="video-panel__entry-title" title={e.title}>{e.title}</span>
+                <span className="video-panel__entry-dur">{fmtDuration(e.duration_sec)}</span>
+              </label>
+            ))}
+          </div>
         </div>
       )}
 
