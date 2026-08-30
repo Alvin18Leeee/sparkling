@@ -39,6 +39,7 @@ fn video_opts(dir: &tempfile::TempDir) -> AddTaskOptions {
             auto_subs: false,
         }),
         video_meta: None,
+        collection: None,
     }
 }
 

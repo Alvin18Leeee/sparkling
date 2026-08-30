@@ -36,6 +36,7 @@ fn opts(dir: &tempfile::TempDir, max_speed: Option<u64>) -> AddTaskOptions {
         kind: TaskKind::Http,
         video: None,
         video_meta: None,
+        collection: None,
     }
 }
 
@@ -502,6 +503,7 @@ async fn add_task_works_off_runtime_thread() {
                     kind: TaskKind::Http,
                     video: None,
                     video_meta: None,
+                    collection: None,
                 },
             )
             .unwrap();

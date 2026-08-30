@@ -17,6 +17,7 @@ fn http_rec(id: &str) -> TaskRecord {
         kind: TaskKind::Http,
         video: None,
         video_meta: None,
+        collection: None,
     }
 }
 
@@ -55,7 +56,7 @@ fn migrates_legacy_db_and_defaults_kind_http() {
     let v: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 1);
+    assert_eq!(v, 2, "①期旧库应连迁到当前版本");
     let again = TaskStore::open(&db).unwrap();
     assert_eq!(again.get("old1").unwrap().unwrap().kind, TaskKind::Http);
 }
@@ -91,4 +92,55 @@ fn video_record_roundtrip() {
     );
     assert_eq!(back.video_meta.as_ref().unwrap().title, "测试视频标题");
     assert_eq!(back.video_meta.as_ref().unwrap().duration_sec, Some(123));
+}
+
+/// 手工构造③期 v1 库（有 kind/video 列、无 collection、user_version=1）
+fn v1_db(path: &std::path::Path) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE tasks (
+            id TEXT PRIMARY KEY, url TEXT NOT NULL, state TEXT NOT NULL,
+            save_dir TEXT NOT NULL, filename TEXT, segments INTEGER NOT NULL,
+            max_speed INTEGER, total_size INTEGER,
+            downloaded INTEGER NOT NULL DEFAULT 0, error TEXT,
+            created_at INTEGER NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'http', video_params TEXT, video_meta TEXT
+        );
+        INSERT INTO tasks (id, url, state, save_dir, filename, segments, downloaded,
+                           created_at, kind, video_params, video_meta)
+        VALUES ('v1task', 'https://www.youtube.com/watch?v=1', 'paused', 'D:\\dl',
+                'v.mp4', 1, 0, 1700000002, 'video', NULL, NULL);
+        PRAGMA user_version = 1;",
+    )
+    .unwrap();
+}
+
+#[test]
+fn migrates_v1_to_v2_collection() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("tasks.db");
+    v1_db(&db);
+    let store = TaskStore::open(&db).unwrap();
+    let rec = store.get("v1task").unwrap().unwrap();
+    assert_eq!(rec.kind, TaskKind::Video);
+    assert!(rec.collection.is_none(), "v1 行的 collection 默认 NULL");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let v: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(v, 2);
+    // 幂等：重复打开不重复 ALTER
+    drop(store);
+    assert!(TaskStore::open(&db).is_ok());
+}
+
+#[test]
+fn collection_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TaskStore::open(&dir.path().join("tasks.db")).unwrap();
+    let mut rec = http_rec("c1");
+    rec.collection = Some("测试合集".into());
+    store.insert(&rec).unwrap();
+    let back = store.get("c1").unwrap().unwrap();
+    assert_eq!(back.collection.as_deref(), Some("测试合集"));
 }

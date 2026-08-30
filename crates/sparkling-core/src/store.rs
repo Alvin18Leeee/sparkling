@@ -21,6 +21,8 @@ pub struct TaskRecord {
     pub kind: TaskKind,
     pub video: Option<VideoParams>,
     pub video_meta: Option<VideoMeta>,
+    /// 所属合集名（播放列表批量任务）；None = 独立任务
+    pub collection: Option<String>,
 }
 
 pub struct TaskStore {
@@ -74,6 +76,16 @@ impl TaskStore {
             )
             .map_err(|e| SparklingError::Other(format!("迁移数据库失败: {e}")))?;
         }
+        // v1→v2：播放列表合集列（批量任务归档目录 + 主界面聚合条目）
+        if version < 2 {
+            conn.execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE tasks ADD COLUMN collection TEXT;
+                 PRAGMA user_version = 2;
+                 COMMIT;",
+            )
+            .map_err(|e| SparklingError::Other(format!("迁移数据库失败: {e}")))?;
+        }
         Ok(Self { conn })
     }
 
@@ -82,8 +94,8 @@ impl TaskStore {
             .execute(
                 "INSERT INTO tasks (id, url, state, save_dir, filename, segments, max_speed,
                                     total_size, downloaded, error, created_at,
-                                    kind, video_params, video_meta)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                                    kind, video_params, video_meta, collection)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     r.id,
                     r.url,
@@ -99,6 +111,7 @@ impl TaskStore {
                     r.kind.as_str(),
                     video_params_json(r)?,
                     video_meta_json(r)?,
+                    r.collection,
                 ],
             )
             .map_err(|e| SparklingError::Other(format!("插入失败: {e}")))?;
@@ -130,6 +143,7 @@ impl TaskStore {
                 .ok()
                 .flatten()
                 .and_then(|s| serde_json::from_str(&s).ok()),
+            collection: row.get(14)?,
         })
     }
 
@@ -137,7 +151,7 @@ impl TaskStore {
         self.conn
             .query_row(
                 "SELECT id, url, state, save_dir, filename, segments, max_speed, total_size,
-                        downloaded, error, created_at, kind, video_params, video_meta
+                        downloaded, error, created_at, kind, video_params, video_meta, collection
                  FROM tasks WHERE id = ?1",
                 params![id],
                 Self::row_to_record,
@@ -152,7 +166,7 @@ impl TaskStore {
             .conn
             .prepare(
                 "SELECT id, url, state, save_dir, filename, segments, max_speed, total_size,
-                        downloaded, error, created_at, kind, video_params, video_meta
+                        downloaded, error, created_at, kind, video_params, video_meta, collection
                  FROM tasks ORDER BY created_at DESC, rowid DESC",
             )
             .map_err(|e| SparklingError::Other(format!("查询失败: {e}")))?;
@@ -235,6 +249,7 @@ mod tests {
             kind: TaskKind::Http,
             video: None,
             video_meta: None,
+            collection: None,
         }
     }
 

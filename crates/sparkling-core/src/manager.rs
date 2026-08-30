@@ -78,6 +78,8 @@ pub struct AddTaskOptions {
     pub max_speed: Option<u64>,
     pub kind: TaskKind,
     pub video: Option<VideoParams>,
+    /// 所属合集名（播放列表批量任务）；save_dir 由调用方拼好合集子目录
+    pub collection: Option<String>,
     pub video_meta: Option<VideoMeta>,
 }
 
@@ -193,6 +195,7 @@ impl TaskManager {
             kind: opts.kind,
             video: opts.video,
             video_meta: opts.video_meta,
+            collection: opts.collection,
             total_size: None,
             downloaded: 0,
             error: None,

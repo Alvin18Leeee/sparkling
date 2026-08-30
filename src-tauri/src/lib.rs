@@ -71,6 +71,7 @@ fn persist_config(path: &std::path::Path, cfg: &ManagerConfig) -> Result<(), Str
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // 前端 invoke 逐字段传参，拆结构体反而增加两端口径
 fn add_task(
     state: State<AppState>,
     url: String,
@@ -79,17 +80,30 @@ fn add_task(
     kind: Option<String>,
     video: Option<VideoParams>,
     video_meta: Option<VideoMeta>,
+    collection: Option<String>,
 ) -> Result<String, String> {
     // 新增参数全 Option：旧前端 invoke 不传 → http 任务（①期行为不变）
     let kind = TaskKind::parse(kind.as_deref().unwrap_or("http")).ok_or("未知任务类型")?;
+    // 合集任务归档到 <下载目录>/<消毒合集名>/ 子目录（目录名同样远端可控）
+    let save_dir = match &collection {
+        Some(name) => {
+            let dir = state
+                .default_save_dir
+                .join(sparkling_core::http_engine::sanitize_filename(name));
+            std::fs::create_dir_all(&dir).map_err(|e| format!("创建合集目录失败: {e}"))?;
+            dir
+        }
+        None => state.default_save_dir.clone(),
+    };
     let opts = AddTaskOptions {
-        save_dir: state.default_save_dir.clone(),
+        save_dir,
         filename,
         segments,
         max_speed: None,
         kind,
         video,
         video_meta,
+        collection,
     };
     state
         .manager
