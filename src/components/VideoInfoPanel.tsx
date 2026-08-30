@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { FormatEntry, ManagerConfig, PlaylistEntry, VideoInfo } from '../types';
-import { fmtBytes, fmtDuration, selectorFromPreference } from '../types';
+import { fmtBytes, fmtDuration, httpsUpgrade, selectorFromPreference } from '../types';
 
 /** 画质档位（UI 选择粒度；selector 是 yt-dlp -f 模板，跨视频稳定） */
 interface QualityOption {
@@ -91,7 +91,9 @@ export default function VideoInfoPanel({
   return (
     <div className="video-panel">
       <div className="video-panel__head">
-        {info.thumbnail && <img className="video-panel__thumb" src={info.thumbnail} alt="" />}
+        {info.thumbnail && (
+          <img className="video-panel__thumb" src={httpsUpgrade(info.thumbnail)} alt="" />
+        )}
         <div className="video-panel__meta">
           <div className="video-panel__title" title={info.title}>{info.title}</div>
           <div className="video-panel__sub">

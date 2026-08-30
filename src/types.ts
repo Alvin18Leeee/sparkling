@@ -106,6 +106,12 @@ export function fmtBytes(n: number | null | undefined): string {
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
+/** http 资源升级为 https：B 站等站点返回 http 缩略图，安全上下文页面
+ * （tauri://localhost）对 http 图片执行 mixed content 阻断导致坏图 */
+export function httpsUpgrade(url: string): string {
+  return url.startsWith('http://') ? `https://${url.slice('http://'.length)}` : url;
+}
+
 /** 常见视频站点白名单——仅做添加对话框的 UI 提示，不是权威判断 */
 const VIDEO_SITES = [
   'youtube.com', 'youtu.be', 'bilibili.com', 'b23.tv', 'douyin.com',
