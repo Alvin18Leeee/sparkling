@@ -351,6 +351,9 @@ main::-webkit-scrollbar-thumb:hover { background: #25406b; }
 .video-panel__sub { color: var(--mist); font-size: 12px; margin-top: 4px; }
 .video-panel__list { max-height: 200px; overflow-y: auto; border: 1px solid var(--line);
   border-radius: 4px; padding: 6px 10px; margin: 8px 0; }
+.modal .video-panel__selectall { display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--mist); padding: 2px 0 6px;
+  border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 /* 带 .modal 前缀抬过 .modal label 的特异性（否则会被改成块级 + 13px 外距） */
 .modal .video-panel__entry {
   display: flex; gap: 8px; align-items: center;
