@@ -92,7 +92,14 @@ export default function VideoInfoPanel({
     <div className="video-panel">
       <div className="video-panel__head">
         {info.thumbnail && (
-          <img className="video-panel__thumb" src={httpsUpgrade(info.thumbnail)} alt="" />
+          <img
+            className="video-panel__thumb"
+            src={httpsUpgrade(info.thumbnail)}
+            // B 站等图床 Referer 防盗链：webview 图片请求携带页面 Referer 会 403；
+            // no-referrer 不发 Referer，图床放行空 Referer（实测 200 vs 403）
+            referrerPolicy="no-referrer"
+            alt=""
+          />
         )}
         <div className="video-panel__meta">
           <div className="video-panel__title" title={info.title}>{info.title}</div>
